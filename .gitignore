@@ -1,0 +1,37 @@
+# Love2D
+*.love
+
+# Lua
+luac.out
+*.o
+*.a
+*.so
+*.dylib
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# ROM Saves (user-generated)
+RomSaves/
+*.sav
+*.batt
+
+# Restore Points (user-generated)
+RestorePoints/
+
+# ROMs (optional - uncomment if you want to exclude them)
+Roms/
+
+# Debug/Profiling
+*.prof
+*.log
+
+# IDE specific
+*.sublime-project
+*.sublime-workspace
