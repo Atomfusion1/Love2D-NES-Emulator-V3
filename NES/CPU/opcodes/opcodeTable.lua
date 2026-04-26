@@ -262,6 +262,8 @@ AddOpcode(0x8F, "SAX", addressMode.GetAbsoluteAddressMode, illegalOpcode.SAXFunc
 AddOpcode(0x83, "SAX", addressMode.GetIndexed_Indirect_XMode, illegalOpcode.SAXFunction, 2, 6)
 -- SBC
 AddOpcode(0xEB, "SBC", addressMode.GetImmediateMode, functionO_T.SBCFunction, 2, 2)
+-- AXS/SBX
+AddOpcode(0xCB, "AXS", addressMode.GetImmediateMode, illegalOpcode.AXSFunction, 2, 2)
 -- DCP
 AddOpcode(0xC7, "DCP", addressMode.GetZeroPageAddressMode, illegalOpcode.DCPFunction, 2, 5)
 AddOpcode(0xD7, "DCP", addressMode.GetZeroPage_XAddressMode, illegalOpcode.DCPFunction, 2, 6)

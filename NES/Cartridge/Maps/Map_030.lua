@@ -5,7 +5,7 @@ local mapper = {}
 mapper.version = 0x1E  -- Mapper 30 (UNROM 512)
 mapper.chrDirty = true
 
-local band, bor, lshift, rshift = bit.band, bit.bor, bit.lshift, bit.rshift
+local band, rshift = bit.band, bit.rshift
 
 -- UNROM 512 / Mapper 30
 -- CPU $8000-$BFFF: 16KB switchable PRG window
@@ -20,6 +20,12 @@ local CHRBank = 0             -- Selected 8KB CHR-RAM bank (bits [6:5], only 2 b
 local chrRAM = {}             -- CHR RAM (32KB total for UNROM 512)
 
 local nametableMode = 0       -- Bit 7: Nametable arrangement
+local submapper = 0
+local hasBattery = false
+local useBusConflicts = false
+local registerStart = 0x8000
+local headerMirrorMode = 0
+local switchOneScreen = false
 
 -- Initialize CHR RAM (32KB for UNROM 512)
 for i = 0, 0x7FFF do
@@ -48,35 +54,45 @@ function mapper.CPURead(addr)
     return 0x00
 end
 
-function mapper.CPUWrite(addr, value)
+local function updateMirroring()
+    if submapper == 3 then
+        -- Submapper 3 uses bit 7 as H/V mirroring select.
+        cart.Mirror = nametableMode == 1 and 1 or 0
+    elseif switchOneScreen then
+        cart.Mirror = nametableMode == 1 and 3 or 2
+    else
+        cart.Mirror = headerMirrorMode
+    end
+end
+
+local function applyBankRegister(value)
     -- Register write: D~[NCCP PPPP]
-    -- Bits [4:0]: PRG bank select (5 bits)
-    -- Bits [6:5]: CHR bank select (2 bits, for 8KB windows in 32KB CHR)
-    -- Bit [7]: Nametable arrangement
-    
-    if addr >= 0x8000 and addr <= 0xFFFF then
-        PRGBank16K = band(value, 0x1F)              -- Lower 5 bits: PRG bank select
-        CHRBank = band(rshift(value, 5), 0x03)      -- Bits 5-6: CHR bank select (2 bits only)
-        nametableMode = band(rshift(value, 7), 0x01) -- Bit 7: Nametable arrangement
-        
-        -- Update mirroring based on nametable mode and header configuration
-        -- For now, use nametable mode bit directly
-        if nametableMode == 1 then
-            cart.Mirror = 1  -- Vertical
-        else
-            cart.Mirror = 0  -- Horizontal
+    -- Bits [4:0]: PRG bank select
+    -- Bits [6:5]: CHR-RAM bank select
+    -- Bit [7]: Optional nametable control, depending on board/header.
+    PRGBank16K = band(value, 0x1F)
+    CHRBank = band(rshift(value, 5), 0x03)
+    nametableMode = band(rshift(value, 7), 0x01)
+    updateMirroring()
+
+    mapper.chrDirty = true
+
+    if loopy and loopy.scanLine < 240 and loopy:SearchPPUStatesInRange(loopy.scanLine - 1, loopy.scanLine + 1) then
+        loopy:SearchPPUStatesInRangeAndReplace(
+            loopy.scanLine - 1,
+            loopy.scanLine + 1,
+            require("NES.PPU.ppu").GetPPUState(loopy.scanLine)
+        )
+    end
+end
+
+function mapper.CPUWrite(addr, value)
+    if addr >= registerStart and addr <= 0xFFFF then
+        if useBusConflicts then
+            value = band(value, mapper.CPURead(addr))
         end
-        
-        mapper.chrDirty = true
-        
-        -- Update PPU state if scanline < 240
-        if loopy and loopy.scanLine < 240 and loopy:SearchPPUStatesInRange(loopy.scanLine - 1, loopy.scanLine + 1) then
-            loopy:SearchPPUStatesInRangeAndReplace(
-                loopy.scanLine - 1,
-                loopy.scanLine + 1,
-                require("NES.PPU.ppu").GetPPUState(loopy.scanLine)
-            )
-        end
+
+        applyBankRegister(value)
     end
 end
 
@@ -97,6 +113,7 @@ function mapper.PPUWrite(addr, value)
     if addr >= 0x0000 and addr <= 0x1FFF then
         local chrAddr = CHRBank * 0x2000 + band(addr, 0x1FFF)
         chrRAM[chrAddr] = value
+        mapper.chrDirty = true
         return true
     end
     
@@ -109,6 +126,12 @@ function mapper.INI()
     -- Byte 5: CHR capacity (should be 0 for CHR-RAM only)
     
     local prgSize = cart.header[0x04] or 0
+    local flags6 = cart.header[0x06] or 0
+    local flags7 = cart.header[0x07] or 0
+    local flags8 = cart.header[0x08] or 0
+    local isNES2 = band(flags7, 0x0C) == 0x08
+    submapper = isNES2 and rshift(flags8, 4) or 0
+    hasBattery = band(flags6, 0x02) ~= 0
     
     -- Calculate total 16KB banks
     -- Each unit in header is 16KB (PRG), so:
@@ -130,15 +153,28 @@ function mapper.INI()
     PRGBank16K = 0
     CHRBank = 0
     nametableMode = 0
-    
-    -- Mirror mode from header (0=Horizontal, 1=Vertical)
-    local headerMirror = band(cart.header[0x06] or 0, 0x01)
-    cart.Mirror = headerMirror
+
+    -- Header mirroring follows the emulator convention: 0=horizontal, 1=vertical.
+    headerMirrorMode = band(flags6, 0x01)
+    switchOneScreen = submapper ~= 3 and band(flags6, 0x08) ~= 0 and headerMirrorMode == 0
+
+    if submapper == 0 then
+        useBusConflicts = not hasBattery
+    else
+        useBusConflicts = submapper == 2
+    end
+
+    -- No-bus-conflict/self-flashable UNROM-512 decodes the bank register at $C000-$FFFF.
+    registerStart = (useBusConflicts or (submapper == 0 and not hasBattery)) and 0x8000 or 0xC000
+    updateMirroring()
     
     print("Mapper 30 (UNROM 512) initialized")
     print("PRG 16K banks:", PRG16KCount)
     print("CHR: 32KB RAM (4 x 8KB banks)")
-    print("Mirror mode:", headerMirror == 0 and "Horizontal" or "Vertical")
+    print("Submapper:", submapper)
+    print("Bus conflicts:", useBusConflicts and "Yes" or "No")
+    print(string.format("Register decode: $%04X-$FFFF", registerStart))
+    print("Mirror mode:", cart.Mirror == 0 and "Horizontal" or cart.Mirror == 1 and "Vertical" or cart.Mirror == 2 and "One-screen lower" or "One-screen upper")
     print(string.format("Register: PRG bank=%d, CHR bank=%d, Nametable=%d", PRGBank16K, CHRBank, nametableMode))
 end
 

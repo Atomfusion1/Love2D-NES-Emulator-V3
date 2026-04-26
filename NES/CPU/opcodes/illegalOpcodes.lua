@@ -47,6 +47,16 @@ function opcodeFunction.SAXFunction(address)
     return value,0,0
 end
 
+function opcodeFunction.AXSFunction(address)
+    local value = cpuRead(address)
+    local result = band(cpuInternal.A, cpuInternal.X) - value
+    setFlag("carry", result >= 0 and 1 or 0)
+    result = band(result, 0xFF)
+    CheckZeroAndNegativeFlag(result)
+    cpuInternal.X = result
+    return cpuInternal.X, 0, 0
+end
+
 function CompareFunction(operand1, operand2)
     local result = operand1 - operand2
     result = band(result, 0xFF)
