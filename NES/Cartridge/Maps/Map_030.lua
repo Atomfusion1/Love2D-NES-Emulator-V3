@@ -30,14 +30,20 @@ end
 function mapper.CPURead(addr)
     if addr >= 0x8000 and addr <= 0xBFFF then
         -- $8000-$BFFF: Switchable 16KB PRG ROM bank
-        local offset = band(addr, 0x3FFF)  -- 16KB mask
-        local bank = PRGBank16K % PRG16KCount
-        return cart.ROM[bank * 0x4000 + offset + 0x0010]
+        if PRG16KCount > 0 then
+            local offset = band(addr, 0x3FFF)  -- 16KB mask
+            local bank = PRGBank16K % PRG16KCount
+            local romIdx = bank * 0x4000 + offset + 0x0010
+            return cart.ROM[romIdx] or 0x00
+        end
     
     elseif addr >= 0xC000 and addr <= 0xFFFF then
         -- $C000-$FFFF: Fixed to last 16KB bank
-        local offset = band(addr, 0x3FFF)  -- 16KB mask
-        return cart.ROM[PRG16KLastBank * 0x4000 + offset + 0x0010]
+        if PRG16KCount > 0 then
+            local offset = band(addr, 0x3FFF)  -- 16KB mask
+            local romIdx = PRG16KLastBank * 0x4000 + offset + 0x0010
+            return cart.ROM[romIdx] or 0x00
+        end
     end
 
     return 0x00
@@ -70,9 +76,9 @@ function mapper.PPURead(addr)
     if addr >= 0x0000 and addr <= 0x1FFF then
         if CHRBankCount > 0 then
             -- CHR ROM present
-            local chrOffset = cart.header[0x04] * 0x4000  -- Skip PRG ROM
+            local chrOffset = (cart.header[0x04] or 0) * 0x4000  -- Skip PRG ROM
             local chrAddr = CHRBank * 0x2000 + band(addr, 0x1FFF)
-            return cart.ROM[chrOffset + chrAddr + 0x0010]
+            return cart.ROM[chrOffset + chrAddr + 0x0010] or 0x00
         else
             -- CHR RAM
             return chrRAM[addr] or 0x00
@@ -96,11 +102,18 @@ end
 
 function mapper.INI()
     -- Calculate PRG ROM info
-    PRG16KCount = cart.header[0x04] * 2  -- Convert 16KB units to 16KB banks
+    local prgSize = cart.header[0x04] or 0
+    PRG16KCount = prgSize * 2  -- Convert 16KB units to 16KB banks
+    
+    -- Fallback if PRG size is 0 or invalid
+    if PRG16KCount <= 0 then
+        PRG16KCount = 1
+    end
+    
     PRG16KLastBank = PRG16KCount - 1
     
     -- Calculate CHR info
-    local chrSize = cart.header[0x05]
+    local chrSize = cart.header[0x05] or 0
     CHRBankCount = chrSize
     
     if CHRBankCount == 0 then
@@ -116,7 +129,7 @@ function mapper.INI()
     CHRBank = 0
     
     -- Mirror mode from header (0=Horizontal, 1=Vertical)
-    mirrorMode = band(cart.header[0x06], 0x01)
+    mirrorMode = band(cart.header[0x06] or 0, 0x01)
     cart.Mirror = mirrorMode
     
     print("Mapper 30 (UNROM 512) initialized")
