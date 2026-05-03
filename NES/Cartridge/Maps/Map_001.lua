@@ -31,6 +31,9 @@ mapper.prgRAM = {}
 mapper.chrRAM = {}
 local band, bor, lshift, rshift = bit.band, bit.bor, bit.lshift, bit.rshift
 local debugMAP = false
+local SAVE_INTERVAL = 2
+local SaveTimeout = love.timer.getTime()
+local batteryDirty = false
 
 -- Helper functions for 512KB PRG ROM (SUROM/SXROM) handling
 local function Is512KPRG()
@@ -72,15 +75,20 @@ local function loadSaveState()
         local data = file:read("*all")
         file:close()
         for i = SAVE_STATE_START_ADDRESS, SAVE_STATE_END_ADDRESS do
-            mapper.prgRAM[i] = data:byte(i - SAVE_STATE_START_ADDRESS + 1)
+            mapper.prgRAM[i] = data:byte(i - SAVE_STATE_START_ADDRESS + 1) or 0x00
         end
+        batteryDirty = false
     else
         -- If the save state file doesn't exist, do nothing
         print("No save state file found")
     end
 end
 
-local  function createSaveState()
+local function createSaveState(force)
+    if not force and not batteryDirty then
+        return
+    end
+
     print("CreateSave")
     -- Write the save state data to a file
     local file_path = SAVE_STATE_FILE
@@ -88,10 +96,12 @@ local  function createSaveState()
     if file then
         local data = ""
         for i = SAVE_STATE_START_ADDRESS, SAVE_STATE_END_ADDRESS do
-            data = data .. string.char(mapper.prgRAM[i])
+            data = data .. string.char(mapper.prgRAM[i] or 0x00)
         end
         file:write(data)
         file:close()
+        batteryDirty = false
+        SaveTimeout = love.timer.getTime()
     else
         print("Failed to create save state file at " .. file_path)
     end
@@ -109,8 +119,56 @@ function mapper.load()
         loadSaveState() -- load the save state into memory
     else
         -- file does not exist, create a new save state
+        createSaveState(true)
+    end
+end
+
+function mapper.UpdateBatterySave()
+    if batteryDirty and love.timer.getTime() - SaveTimeout > SAVE_INTERVAL then
         createSaveState()
     end
+end
+
+function mapper.FlushBatterySave()
+    createSaveState()
+end
+
+function mapper.GetSaveState()
+    return {
+        nControlRegister = mapper.nControlRegister,
+        nLoadRegister = mapper.nLoadRegister,
+        nLoadRegisterCount = mapper.nLoadRegisterCount,
+        PRGMode = mapper.PRGMode,
+        nCHRBankSelect4Lo = mapper.nCHRBankSelect4Lo,
+        nCHRBankSelect4Hi = mapper.nCHRBankSelect4Hi,
+        nCHRBankSelect8 = mapper.nCHRBankSelect8,
+        nPRGBankSelect32 = mapper.nPRGBankSelect32,
+        nPRGBankSelect16Lo = mapper.nPRGBankSelect16Lo,
+        nPRGBankSelect16Hi = mapper.nPRGBankSelect16Hi,
+        A18 = mapper.A18,
+        prgRAM = mapper.prgRAM,
+        chrRAM = mapper.chrRAM,
+        batteryDirty = batteryDirty
+    }
+end
+
+function mapper.LoadSaveState(state)
+    if not state then return end
+    mapper.nControlRegister = state.nControlRegister or mapper.nControlRegister
+    mapper.nLoadRegister = state.nLoadRegister or 0x00
+    mapper.nLoadRegisterCount = state.nLoadRegisterCount or 0x00
+    mapper.PRGMode = state.PRGMode or mapper.PRGMode
+    mapper.nCHRBankSelect4Lo = state.nCHRBankSelect4Lo or 0x00
+    mapper.nCHRBankSelect4Hi = state.nCHRBankSelect4Hi or 0x00
+    mapper.nCHRBankSelect8 = state.nCHRBankSelect8 or 0x00
+    mapper.nPRGBankSelect32 = state.nPRGBankSelect32 or 0x00
+    mapper.nPRGBankSelect16Lo = state.nPRGBankSelect16Lo or 0x00
+    mapper.nPRGBankSelect16Hi = state.nPRGBankSelect16Hi or LastInnerBank()
+    mapper.A18 = state.A18 or 0x00
+    mapper.prgRAM = state.prgRAM or mapper.prgRAM
+    mapper.chrRAM = state.chrRAM or mapper.chrRAM
+    batteryDirty = state.batteryDirty or false
+    mapper.chrDirty = true
 end
 
 function mapper.CPURead(addr)
@@ -166,18 +224,11 @@ function mapper.CPURead(addr)
     return cart.ROM[bank * 0x4000 + band(addr, 0x3FFF) + 0x0010]
 end
 
-local SaveTimeout = love.timer.getTime()
-
 function mapper.CPUWrite(addr, data)
     -- Cartridge PRG-RAM ($6000-$7FFF) - always mapped
     if addr >= 0x6000 and addr <= 0x7FFF then
         mapper.prgRAM[addr] = data
-        
-        -- Periodically save state
-        if love.timer.getTime() - SaveTimeout > 30 then
-            createSaveState()
-            SaveTimeout = love.timer.getTime()
-        end
+        batteryDirty = true
         
         return
     end
@@ -366,6 +417,14 @@ end
 
 function mapper.INI()
     CHRoffset = cart.header[0x04] * 0x4000 + 0x0010
+    for i = 0, 0x1FFF do
+        mapper.chrRAM[i] = 0x00
+    end
+    for i = 0x6000, 0x7FFF do
+        mapper.prgRAM[i] = 0x00
+    end
+    batteryDirty = false
+    SaveTimeout = love.timer.getTime()
     
     mapper.nControlRegister = 0x0C
     mapper.nLoadRegister = 0x00
@@ -400,8 +459,8 @@ function mapper.INI()
     
     -- Define the memory location to store the save state data
     -- Remove the last three letters of the file path and replace them with "batt"
-    local basename = string.gsub(GlobalFileName, ".nes", "") -- remove the file extension
-    basename = string.gsub(basename, "Roms/", "") -- remove the directory path
+    local basename = string.gsub(GlobalFileName, "%.nes$", "") -- remove the file extension
+    basename = string.gsub(basename, "^.*[/\\]", "") -- remove the directory path
     local new_file_path = LoveFileDir.."RomSaves/"..basename..".batt"
     SAVE_STATE_FILE = new_file_path
     SAVE_STATE_START_ADDRESS = 0x6000

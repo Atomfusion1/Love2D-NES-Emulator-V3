@@ -47,6 +47,22 @@ function mapper.PPUWrite(addr, value)
     return nil
 end
 
+function mapper.GetSaveState()
+    return {
+        chrBankSelectLo = mapper.chrBankSelectLo,
+        chrBankSelectHi = mapper.chrBankSelectHi,
+        CHRRAM = mapper.CHRRAM
+    }
+end
+
+function mapper.LoadSaveState(state)
+    if not state then return end
+    mapper.chrBankSelectLo = state.chrBankSelectLo or 0x00
+    mapper.chrBankSelectHi = state.chrBankSelectHi or 0x00
+    mapper.CHRRAM = state.CHRRAM or mapper.CHRRAM
+    mapper.chrDirty = true
+end
+
 function mapper.INI()
 
 end

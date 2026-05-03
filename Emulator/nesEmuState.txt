@@ -1,1 +1,1 @@
-Roms/smb.nes
+Roms/FF1Fixed.nes

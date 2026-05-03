@@ -237,4 +237,21 @@ end
             mapper[cart.mapper].mapper.ScanLineUpdate(scanLines)
         end
     end
+
+    function ppuBus.GetSaveState()
+        return {
+            scrollPPULatch = scrollPPULatch,
+            ppu_data_buffer = ppu_data_buffer,
+            trimaddr = trimaddr,
+            vRamAddress = vRamAddress
+        }
+    end
+
+    function ppuBus.LoadSaveState(state)
+        if not state then return end
+        scrollPPULatch = state.scrollPPULatch or 0
+        ppu_data_buffer = state.ppu_data_buffer or 0x00
+        trimaddr = state.trimaddr or 0x00
+        vRamAddress = state.vRamAddress or 0x00
+    end
 return ppuBus

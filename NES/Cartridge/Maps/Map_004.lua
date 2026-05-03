@@ -243,6 +243,62 @@ function mapper.CheckIRQ()
     return false
 end
 
+function mapper.GetSaveState()
+    return {
+        prgBankMode = prgBankMode,
+        chrBankMode = chrBankMode,
+        bankSelect = bankSelect,
+        irqCounter = irqCounter,
+        irqLatch = irqLatch,
+        irqReload = irqReload,
+        doIRQ = doIRQ,
+        irqEnable = irqEnable,
+        PRGRAMEnabled = PRGRAMEnabled,
+        PRGBank6 = PRGBank6,
+        PRGBank7 = PRGBank7,
+        PRGBankLast = PRGBankLast,
+        PRGBankSecondLast = PRGBankSecondLast,
+        prg8kCount = prg8kCount,
+        CHRBank0a = CHRBank0a,
+        CHRBank0b = CHRBank0b,
+        CHRBank1a = CHRBank1a,
+        CHRBank1b = CHRBank1b,
+        CHRBank2 = CHRBank2,
+        CHRBank3 = CHRBank3,
+        CHRBank4 = CHRBank4,
+        CHRBank5 = CHRBank5,
+        prgRAM = mapper.prgRAM
+    }
+end
+
+function mapper.LoadSaveState(state)
+    if not state then return end
+    prgBankMode = state.prgBankMode or 0
+    chrBankMode = state.chrBankMode or 0
+    bankSelect = state.bankSelect or 0
+    irqCounter = state.irqCounter or 0
+    irqLatch = state.irqLatch or 0
+    irqReload = state.irqReload or false
+    doIRQ = state.doIRQ or false
+    irqEnable = state.irqEnable or false
+    PRGRAMEnabled = state.PRGRAMEnabled ~= false
+    PRGBank6 = state.PRGBank6 or 0x00
+    PRGBank7 = state.PRGBank7 or 0x00
+    PRGBankLast = state.PRGBankLast or PRGBankLast
+    PRGBankSecondLast = state.PRGBankSecondLast or PRGBankSecondLast
+    prg8kCount = state.prg8kCount or prg8kCount
+    CHRBank0a = state.CHRBank0a or CHRBank0a
+    CHRBank0b = state.CHRBank0b or CHRBank0b
+    CHRBank1a = state.CHRBank1a or CHRBank1a
+    CHRBank1b = state.CHRBank1b or CHRBank1b
+    CHRBank2 = state.CHRBank2 or CHRBank2
+    CHRBank3 = state.CHRBank3 or CHRBank3
+    CHRBank4 = state.CHRBank4 or CHRBank4
+    CHRBank5 = state.CHRBank5 or CHRBank5
+    mapper.prgRAM = state.prgRAM or mapper.prgRAM
+    mapper.chrDirty = true
+end
+
 function mapper.INI()
     CHRoffset = cart.header[0x04] * 0x4000 + 0x0010
     prg8kCount = cart.header[0x04] * 2

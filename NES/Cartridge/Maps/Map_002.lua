@@ -42,6 +42,20 @@ function mapper.PPUWrite(addr, value)
     mapper.CHRRAM[addr] = value
 end
 
+function mapper.GetSaveState()
+    return {
+        prgBankSelectLo = mapper.prgBankSelectLo,
+        CHRRAM = mapper.CHRRAM
+    }
+end
+
+function mapper.LoadSaveState(state)
+    if not state then return end
+    mapper.prgBankSelectLo = state.prgBankSelectLo or 0x00
+    mapper.CHRRAM = state.CHRRAM or mapper.CHRRAM
+    mapper.chrDirty = true
+end
+
 function mapper.INI()
 
 end

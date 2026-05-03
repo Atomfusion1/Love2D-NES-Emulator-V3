@@ -60,6 +60,26 @@ function mapper.PPUWrite(addr, data)
     print(addr, data)
 end
 
+function mapper.GetSaveState()
+    return {
+        prgRomBank1 = prgRomBank1,
+        chrBank0Latch0 = chrBank0Latch0,
+        chrBank1Latch0 = chrBank1Latch0,
+        chrBank0Latch1 = chrBank0Latch1,
+        chrBank1Latch1 = chrBank1Latch1
+    }
+end
+
+function mapper.LoadSaveState(state)
+    if not state then return end
+    prgRomBank1 = state.prgRomBank1 or 0
+    chrBank0Latch0 = state.chrBank0Latch0 or 0
+    chrBank1Latch0 = state.chrBank1Latch0 or 0
+    chrBank0Latch1 = state.chrBank0Latch1 or 0
+    chrBank1Latch1 = state.chrBank1Latch1 or 0
+    mapper.chrDirty = true
+end
+
 function mapper.INI()
     cart.Mirror = bit.band(cart.header[0x06], 0x01) == 1 and 1 or 0
     -- 0 - Horizontal Mirror

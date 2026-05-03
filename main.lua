@@ -35,6 +35,14 @@ function love.update(dt)
     if Profile then profile.start() end
     keyboard.Update(dt)     --* Keyboard Update
     apu.TimerCheck(dt)      --* Audio Update 
+    local activeMapper = mapper[cart.mapper] and mapper[cart.mapper].mapper
+    if activeMapper and activeMapper.UpdateBatterySave then
+        activeMapper.UpdateBatterySave()
+    end
+    if G_SkipFrameAfterStateLoad then
+        G_SkipFrameAfterStateLoad = false
+        return
+    end
     --* CPU Execution
     if G_CPUStep == 2 then      --# 2 = 1 frame at a time
         cpu.ExecuteCycles(29780) -- 29780 is one frame but Changing this 
@@ -53,6 +61,13 @@ function love.draw()
     cpu.drawFrame = false
 end
 
+function love.quit()
+    local activeMapper = mapper[cart.mapper] and mapper[cart.mapper].mapper
+    if activeMapper and activeMapper.FlushBatterySave then
+        activeMapper.FlushBatterySave()
+    end
+end
+
 --# Debug Function 
 function DebugDraw()
     if EnableDebug then
@@ -63,6 +78,11 @@ end
 
 --# Initialize Cartridge
 function Initialize (file)
+    local activeMapper = cart.mapper and mapper[cart.mapper] and mapper[cart.mapper].mapper
+    if activeMapper and activeMapper.FlushBatterySave then
+        activeMapper.FlushBatterySave()
+    end
+
     for i = 1, 5 do
         print("") --* Clear Section of Console
     end

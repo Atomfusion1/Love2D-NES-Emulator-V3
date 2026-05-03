@@ -64,6 +64,22 @@ function mapper.PPUWrite(addr, data)
     return false
 end
 
+function mapper.GetSaveState()
+    return {
+        PRGROMBank = PRGROMBank,
+        PRG32KCount = PRG32KCount,
+        chrRAM = mapper.chrRAM
+    }
+end
+
+function mapper.LoadSaveState(state)
+    if not state then return end
+    PRGROMBank = state.PRGROMBank or PRGROMBank
+    PRG32KCount = state.PRG32KCount or PRG32KCount
+    mapper.chrRAM = state.chrRAM or mapper.chrRAM
+    mapper.chrDirty = true
+end
+
 function mapper.INI()
     PRG32KCount = math.floor(cart.header[0x04] / 2)
 

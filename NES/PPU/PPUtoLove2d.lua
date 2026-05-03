@@ -284,20 +284,24 @@ end
 
 --# Draw Sprites Helper
 local function processSprite(ptrScreenBuffer, spriteIndex, spriteHeight, use8x16Sprites)
+    local states = loopy.ppuStates
+    if not states[1] then
+        return
+    end
+
     local scanLines, tileIndex, attributes, x = getSpriteData(spriteIndex)
     scanLines = scanLines + 1
     if scanLines <= 1 or scanLines > 239 then
         return
     end
-    local states = loopy.ppuStates
     local passTableBuffer = states[#states].spriteTileSet
     local passSpritePattern = states[#states].spriteTable
     
-    local stateFound = 1
     -- Iterate through states
     for i = 1, #states do
+        local nextScanLine = states[i + 1] and states[i + 1].scanLine or 241
         -- Check if scanLines is between the scanLine of the current state and the next state
-        if scanLines >= states[i].scanLine and scanLines < states[i + 1].scanLine then
+        if scanLines >= states[i].scanLine and scanLines < nextScanLine then
             -- Check the ACTUAL matching state, not stateFound=1
             if states[i].isDrawSprites == false then return end
             passTableBuffer = states[i].spriteTileSet
