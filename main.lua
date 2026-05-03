@@ -1,4 +1,3 @@
---quick test
 --! Order Matters .. Cart First for setup  
 local cart          = require("NES.Cartridge.Cartridge")
 local mapper        = require("NES.Cartridge.Mappers")
