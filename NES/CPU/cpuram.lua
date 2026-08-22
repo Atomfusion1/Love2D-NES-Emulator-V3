@@ -19,4 +19,12 @@ for i=0x5000,0x8000 do
     cpuMemory.cpuRAM[i] = 0x00
 end
 
+-- Loading a cartridge is a power cycle. Keep this table because the bus holds
+-- a reference to it, but clear the physical 2 KB internal RAM in place.
+function cpuMemory.Reset()
+    for i = 0x0000, 0x07FF do
+        cpuMemory.cpuRAM[i] = 0x00
+    end
+end
+
 return cpuMemory

@@ -17,6 +17,8 @@ cpu.drawFrame = false
 cpu.totalCycles = 4
 
 function cpu.Initialize(startPCAt)
+    cpu.totalCycles = 7
+    cpu.drawFrame = false
     cpuInternal.A              = 0x00
     cpuInternal.X              = 0x00
     cpuInternal.Y              = 0x00
@@ -44,6 +46,9 @@ function cpu.Initialize(startPCAt)
     -- Initialize interrupt trigger flags
     cpuInternal.TriggerNMI = false
     cpuInternal.TriggerIRQ = false
+    cpuInternal.StartNMI = false
+    cpuInternal.StartBreak = false
+    cpuInternal.StartReset = false
 
     print(string.format("NMI:%x, PC:%x, BRK:%x, CHRLocation:%x CartMapper:%x", cpuInternal.NMIInterrupt, cpuInternal.programCounter,
         cpuInternal.BRKInterrupt, cpuInternal.CHRLocation, cart.mapper))

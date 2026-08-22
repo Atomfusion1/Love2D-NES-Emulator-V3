@@ -13,6 +13,8 @@ local selectFile    = require('Emulator.UI.Emulator.selectfile')
 local loveSpeed     = require('Includes.displaytimer')
 local profile       = require("Includes.profile.profile")
 local Sprite0Scanline = require("NES.PPU.Sprite0Hack")
+local cpuRAM        = require("NES.CPU.cpuram")
+local controller    = require("NES.Controller.controller")
 --* Global Variables
 LoveFileDir             = love.filesystem.getSourceBaseDirectory() .. "/" .. love.filesystem.getIdentity() .. "/"
 GlobalFileName          = love.filesystem.read("Emulator/nesEmuState.txt")
@@ -93,6 +95,10 @@ function love.quit()
     if activeMapper and activeMapper.FlushBatterySave then
         activeMapper.FlushBatterySave()
     end
+    local batteryMapper = mapper[1] and mapper[1].mapper
+    if batteryMapper and batteryMapper.ShutdownBatteryWriter then
+        batteryMapper.ShutdownBatteryWriter()
+    end
 end
 
 --# Debug Function 
@@ -114,13 +120,19 @@ function Initialize (file)
         print("") --* Clear Section of Console
     end
     print(file)
-    ppu.sprite0Offset = Sprite0Scanline:CheckForSprite0Hit(file) or 0
-    ppu.scanLineOffset = Sprite0Scanline:CheckForScanLineOffset(file) or 0
     local totalfile = LoveFileDir .. file
     cart.Initialize(totalfile) --* setup for mappers --
     print("mapper loaded:" .. cart.mapper)
     mapper[cart.mapper].mapper.INI()
     bus.RefreshMapperCache()  -- Cache mapper functions for hot-path optimization
+    cpuRAM.Reset()
+    controller.Reset()
+    ppu.Reset()
+
+    -- Reset clears the prior title's overrides; apply those for the new title.
+    ppu.sprite0Offset = Sprite0Scanline:CheckForSprite0Hit(file) or 0
+    ppu.scanLineOffset = Sprite0Scanline:CheckForScanLineOffset(file) or 0
+    emulationTime = 0
     apu.Initialize()
     cpu.Initialize()
 end

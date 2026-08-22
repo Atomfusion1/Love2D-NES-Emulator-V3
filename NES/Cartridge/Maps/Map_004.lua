@@ -304,6 +304,31 @@ function mapper.INI()
     prg8kCount = cart.header[0x04] * 2
     PRGBankSecondLast = prg8kCount - 2
     PRGBankLast = prg8kCount - 1
+
+    prgBankMode = 0
+    chrBankMode = 0
+    bankSelect = 0
+    irqCounter = 0
+    irqLatch = 0
+    irqReload = false
+    doIRQ = false
+    irqEnable = false
+    PRGRAMEnabled = true
+    PRGBank6 = 0x00
+    PRGBank7 = 0x00
+    CHRBank0a = 0x00
+    CHRBank0b = 0x01
+    CHRBank1a = 0x00
+    CHRBank1b = 0x01
+    CHRBank2 = 0x00
+    CHRBank3 = 0x00
+    CHRBank4 = 0x00
+    CHRBank5 = 0x00
+    mapper.chrDirty = true
+
+    for i = 0x6000, 0x7FFF do
+        mapper.prgRAM[i] = 0x00
+    end
 end
 
 return mapper

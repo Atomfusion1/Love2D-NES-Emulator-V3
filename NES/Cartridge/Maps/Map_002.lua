@@ -57,7 +57,12 @@ function mapper.LoadSaveState(state)
 end
 
 function mapper.INI()
-
+    mapper.prgBankSelectLo = 0x00
+    mapper.prgBankSelectHi = cart.header[0x04] - 1
+    mapper.chrDirty = true
+    for i = 0, 0x1FFF do
+        mapper.CHRRAM[i] = 0x00
+    end
 end
 
 return mapper

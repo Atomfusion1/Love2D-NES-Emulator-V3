@@ -14,6 +14,21 @@ local debugPPU2000 = false
 local ppu_data_buffer = 0x00
 local vRamAddress = 0x00
 
+function ppuBus.Reset()
+    ppu_data_buffer = 0x00
+    vRamAddress = 0x00
+
+    for tableIndex = 0, 1 do
+        for i = 0, 0x03FF do
+            nameTable.tblName[tableIndex][i] = 0x00
+        end
+    end
+    for i = 0, 0x1F do
+        nameTable.tblPalette[i] = 0x00
+    end
+    OAM.Clear()
+end
+
 local CPURegisters = {
     readHandlers = {
         [0x0000] = function () return 0x00 end, -- control

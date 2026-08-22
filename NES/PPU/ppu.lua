@@ -47,6 +47,55 @@ local Sprite0Scanline
 local ppuCycles
 local debug = false
 ppu.DrawScreen = false
+
+-- Loading another cartridge is a complete console power cycle. Reset both the
+-- public PPU state and the local timing state while retaining table identities
+-- that other modules cache.
+function ppu.Reset()
+    ppu.scanLinePixels = 0
+    ppu.scanLines = -1
+    ppu.vBlankEnd = false
+    ppu.currentFrame = 1
+    ppu.DrawScreen = false
+    ppu.sprite0Offset = 0
+    ppu.scanLineOffset = 0
+    cachedTileSet = nil
+
+    vBlankFlag = false
+    scanLinePixels = 0
+    scanLines = -1
+    CTRL = 0x00
+    STATUS = 0x00
+    Sprite0Scanline = 0
+    ppuCycles = 0
+
+    ppuIO.CTRL = 0x00
+    ppuIO.MASKS = 0x00
+    ppuIO.STATUS = 0x00
+    ppuIO.OAMADDR = 0x00
+    ppuIO.OAMDATA = 0x00
+    ppuIO.SCROLL = 0x00
+    ppuIO.ADDR = 0x00
+    ppuIO.DATA = 0x00
+    ppuIO.OAMDMA = 0x00
+    ppuIO.NMIArmed = false
+    ppuIO.delayPPU = 0
+    ppuIO.NameTableAddress = 0x00
+    ppuIO.BackgroundTable = 0x00
+    ppuIO.SpriteTable = 0x00
+
+    loopy:ResetScroll()
+    loopy.ppuStates = {}
+    loopy.scanLine = -1
+    loopy.scanLinePixels = 0
+    loopy.drawScreen = false
+    loopy.drawSprites = false
+    loopy.inVBlank = false
+    loopy.offsetY = 0
+
+    ppuBus.Reset()
+end
+
 --# Main Update PPU Cycle
 function ppu.Update(cpuCycles)
     ppuCycles = cpuCycles * 3

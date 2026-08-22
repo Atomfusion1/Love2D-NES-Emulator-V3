@@ -64,7 +64,9 @@ function mapper.LoadSaveState(state)
 end
 
 function mapper.INI()
-
+    mapper.chrBankSelectLo = 0x00
+    mapper.chrBankSelectHi = 0x00
+    mapper.chrDirty = true
 end
 
 return mapper

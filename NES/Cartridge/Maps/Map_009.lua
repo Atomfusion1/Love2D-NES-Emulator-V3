@@ -88,6 +88,12 @@ function mapper.INI()
     print("mapper initialized Mirror State "..cart.Mirror)
     CHRoffset = cart.header[0x04]*0x4000 + 0x0010 -- offset for header added back on 
     ROM = cart.ROM
+    prgRomBank1 = 0
+    chrBank0Latch0 = 0
+    chrBank1Latch0 = 0
+    chrBank0Latch1 = 0
+    chrBank1Latch1 = 0
+    mapper.chrDirty = true
     print(CHRoffset)
 end
 

@@ -38,6 +38,15 @@ function controller.GetState(addr)
     end
 end
 
+function controller.Reset()
+    controller.turboLatch1 = 0
+    controller.turboLatch2 = 0
+    controller.Controller1State = 0x00
+    controller.Controller2State = 0x00
+    Controller1FreezeState = 0x00
+    Controller2FreezeState = 0x00
+end
+
 -- # Setup Key Pressed Values 
 local keyIsDown = {
     ["up"] = function(controllers) return controllers + bit.lshift(1, 3) end,

@@ -90,6 +90,11 @@ function mapper.INI()
     -- Last 32 KB bank is safest for reset vector.
     PRGROMBank = PRG32KCount - 1
 
+    for i = 0, 0x1FFF do
+        mapper.chrRAM[i] = 0x00
+    end
+    mapper.chrDirty = true
+
     cart.Mirror = 2 -- one-screen lower default
 
     print("Mapper 7 initialized")

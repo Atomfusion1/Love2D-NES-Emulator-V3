@@ -23,17 +23,76 @@ mapper.nPRGBankSelect16Lo  = 0x00
 mapper.nPRGBankSelect16Hi  = 0x1F
 mapper.A18                 = 0x00
 
--- Initialize mirroring
-cart.Mirror = 3-bit.band(mapper.nControlRegister, 0x03)
-
-
 mapper.prgRAM = {}
 mapper.chrRAM = {}
 local band, bor, lshift, rshift = bit.band, bit.bor, bit.lshift, bit.rshift
+local ffi = require("ffi")
 local debugMAP = false
 local SAVE_INTERVAL = 2
 local SaveTimeout = love.timer.getTime()
 local batteryDirty = false
+local batteryEnabled = false
+local BATTERY_SIZE = 0x2000
+local batteryWriteBuffer = ffi.new("uint8_t[?]", BATTERY_SIZE)
+local batteryWriterThread
+local batteryRequests
+local batteryAcknowledgements
+local nextBatterySaveId = 0
+local lastQueuedBatterySaveId = 0
+local lastCompletedBatterySaveId = 0
+
+local function ensureBatteryWriter()
+    if batteryWriterThread and batteryWriterThread:isRunning() then return end
+
+    batteryRequests = love.thread.getChannel("nes_battery_save_requests")
+    batteryAcknowledgements = love.thread.getChannel("nes_battery_save_acknowledgements")
+    batteryRequests:clear()
+    batteryAcknowledgements:clear()
+    batteryWriterThread = love.thread.newThread("NES/Cartridge/batteryWriterThread.lua")
+    batteryWriterThread:start()
+end
+
+local function processBatteryAcknowledgement(message)
+    local idText, okText = message:match("^(%-?%d+)\t([01])\t")
+    local id = tonumber(idText)
+    if not id or id < 0 then return id, true end
+
+    lastCompletedBatterySaveId = math.max(lastCompletedBatterySaveId, id)
+    local ok = okText == "1"
+    if not ok then batteryDirty = true end
+    return id, ok
+end
+
+local function pollBatteryAcknowledgements()
+    if not batteryAcknowledgements then return end
+    while true do
+        local message = batteryAcknowledgements:pop()
+        if not message then return end
+        processBatteryAcknowledgement(message)
+    end
+end
+
+local function waitForBatterySave(targetId)
+    if targetId <= lastCompletedBatterySaveId then return true end
+
+    local targetSucceeded = true
+    while lastCompletedBatterySaveId < targetId do
+        local message = batteryAcknowledgements:pop()
+        if message then
+            local id, ok = processBatteryAcknowledgement(message)
+            if id == targetId then targetSucceeded = ok end
+        else
+            local writerError = batteryWriterThread and batteryWriterThread:getError()
+            if writerError then
+                print("Battery writer stopped: " .. writerError)
+                batteryDirty = true
+                return false
+            end
+            love.timer.sleep(0.001)
+        end
+    end
+    return targetSucceeded
+end
 
 -- Helper functions for 512KB PRG ROM (SUROM/SXROM) handling
 local function Is512KPRG()
@@ -67,7 +126,6 @@ for i = 0x6000, 0x7FFF do
 end
 
 local function loadSaveState()
-    print("LoadSave")
     -- Check if the save state file exists
     local file_path = SAVE_STATE_FILE
     local file = io.open(file_path, "rb")
@@ -78,9 +136,9 @@ local function loadSaveState()
             mapper.prgRAM[i] = data:byte(i - SAVE_STATE_START_ADDRESS + 1) or 0x00
         end
         batteryDirty = false
+        return true
     else
-        -- If the save state file doesn't exist, do nothing
-        print("No save state file found")
+        return false
     end
 end
 
@@ -89,41 +147,33 @@ local function createSaveState(force)
         return
     end
 
-    print("CreateSave")
-    -- Write the save state data to a file
-    local file_path = SAVE_STATE_FILE
-    local file = io.open(file_path, "wb")
-    if file then
-        local data = ""
-        for i = SAVE_STATE_START_ADDRESS, SAVE_STATE_END_ADDRESS do
-            data = data .. string.char(mapper.prgRAM[i] or 0x00)
-        end
-        file:write(data)
-        file:close()
-        batteryDirty = false
-        SaveTimeout = love.timer.getTime()
-    else
-        print("Failed to create save state file at " .. file_path)
+    -- Build an immutable snapshot on the emulation thread, then let one
+    -- persistent worker absorb unpredictable filesystem/antivirus latency.
+    for offset = 0, BATTERY_SIZE - 1 do
+        batteryWriteBuffer[offset] = mapper.prgRAM[SAVE_STATE_START_ADDRESS + offset] or 0x00
     end
+    local data = ffi.string(batteryWriteBuffer, BATTERY_SIZE)
+
+    ensureBatteryWriter()
+    nextBatterySaveId = nextBatterySaveId + 1
+    lastQueuedBatterySaveId = nextBatterySaveId
+    batteryRequests:push("save")
+    batteryRequests:push(lastQueuedBatterySaveId)
+    batteryRequests:push(SAVE_STATE_FILE)
+    batteryRequests:push(data)
+    batteryDirty = false
+    SaveTimeout = love.timer.getTime()
 end
 
 -- Save State prgROM (Battery Backup)
 function mapper.load()
-    -- check if the file "save_state.bin" exists
-    local file_path = SAVE_STATE_FILE
-    local file = io.open(file_path, "rb")
-    if file then
-        -- file exists, load it into memory
-        local data = file:read("*all")
-        file:close()
-        loadSaveState() -- load the save state into memory
-    else
-        -- file does not exist, create a new save state
+    if not loadSaveState() then
         createSaveState(true)
     end
 end
 
 function mapper.UpdateBatterySave()
+    pollBatteryAcknowledgements()
     if batteryDirty and love.timer.getTime() - SaveTimeout > SAVE_INTERVAL then
         createSaveState()
     end
@@ -131,6 +181,32 @@ end
 
 function mapper.FlushBatterySave()
     createSaveState()
+    return waitForBatterySave(lastQueuedBatterySaveId)
+end
+
+function mapper.ShutdownBatteryWriter()
+    if not batteryWriterThread then return end
+
+    mapper.FlushBatterySave()
+    batteryRequests:push("quit")
+    while true do
+        local message = batteryAcknowledgements:pop()
+        if message then
+            local id = processBatteryAcknowledgement(message)
+            if id == -1 then break end
+        else
+            local writerError = batteryWriterThread:getError()
+            if writerError then
+                print("Battery writer stopped: " .. writerError)
+                break
+            end
+            love.timer.sleep(0.001)
+        end
+    end
+    batteryWriterThread:wait()
+    batteryWriterThread = nil
+    batteryRequests = nil
+    batteryAcknowledgements = nil
 end
 
 function mapper.GetSaveState()
@@ -228,7 +304,7 @@ function mapper.CPUWrite(addr, data)
     -- Cartridge PRG-RAM ($6000-$7FFF) - always mapped
     if addr >= 0x6000 and addr <= 0x7FFF then
         mapper.prgRAM[addr] = data
-        batteryDirty = true
+        if batteryEnabled then batteryDirty = true end
         
         return
     end
@@ -439,6 +515,11 @@ function mapper.INI()
     mapper.nPRGBankSelect16Lo = 0x00
     mapper.nPRGBankSelect16Hi = LastInnerBank()
     mapper.A18 = 0x00
+    mapper.chrDirty = true
+
+    -- MMC1 powers up with control=$0C, selecting one-screen lower mirroring.
+    -- Do not inherit the mirror mode from the previously loaded cartridge.
+    cart.Mirror = 2
     
     -- Debug: Print PRG ROM bytes around reset vector and interrupts
     if cart.header[0x04] == 2 then
@@ -465,7 +546,14 @@ function mapper.INI()
     SAVE_STATE_FILE = new_file_path
     SAVE_STATE_START_ADDRESS = 0x6000
     SAVE_STATE_END_ADDRESS = 0x7FFF
-    mapper.load()
+    batteryEnabled = band(cart.header[0x06] or 0x00, 0x02) ~= 0
+    if batteryEnabled then
+        print(string.format(
+            "Battery-backed RAM enabled: autosave every %.1f seconds while dirty",
+            SAVE_INTERVAL
+        ))
+        mapper.load()
+    end
 end
 
 return mapper
