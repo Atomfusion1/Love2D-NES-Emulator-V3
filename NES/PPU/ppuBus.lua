@@ -11,9 +11,7 @@ local debugPPU2005 = false
 local debugPPU2006 = false
 local debugPPU2000 = false
 
-local scrollPPULatch = 0
 local ppu_data_buffer = 0x00
-local trimaddr = 0x00
 local vRamAddress = 0x00
 
 local CPURegisters = {
@@ -22,7 +20,7 @@ local CPURegisters = {
         [0x0001] = function () return 0x00 end, -- mask
         [0x0002] = function ()                  -- status       
             local data = bit.bor(bit.band(ppuIO.STATUS,0xE0),bit.band(ppu_data_buffer,0x1F))
-            scrollPPULatch = 0
+            loopy:ResetWriteToggle()
             ppuIO.STATUS = bit.band(ppuIO.STATUS,0x7F)
             return data end,
         [0x0003] = function () return 0x00 end, -- OAM address
@@ -31,14 +29,14 @@ local CPURegisters = {
         [0x0006] = function () return 0x00 end, -- PPU Address
         [0x0007] = function () -- Delay Output from PPU one Read so store it then give it the next read
             local data = ppu_data_buffer
-            ppu_data_buffer = ppuBus.PPURead(loopy.register_vram_addr)
+            ppu_data_buffer = ppuBus.PPURead(loopy.v)
             -- but if its palette data send right away
-            if loopy.register_vram_addr >= 0x3F00 then data = ppu_data_buffer end
+            if loopy.v >= 0x3F00 then data = ppu_data_buffer end
             -- update Pointer location         
             if ppuIO.IsBitSet(ppuIO.CTRL, 2) then
-                loopy.register_vram_addr = loopy.register_vram_addr + 32
+                loopy:IncrementV(32)
             else
-                loopy.register_vram_addr = loopy.register_vram_addr + 1
+                loopy:IncrementV(1)
             end
             if false then print("Read PPU 2007 and data ", data, ppu_data_buffer, loopy.register_vram_addr, ppuIO.IsBitSet(ppuIO.CTRL, 2)) end
             
@@ -57,8 +55,7 @@ local CPURegisters = {
             ppuIO.NameTableAddress = bit.band(data, 0x03)
             ppuIO.BackgroundTable = bit.band(data, 0x10) ~= 0 and 1 or 0
             ppuIO.SpriteTable = bit.band(data, 0x08) ~= 0 and 1 or 0
-            loopy.nametable_x = ppuIO.IsBitSet(ppuIO.CTRL, 0) and 1 or 0
-            loopy.nametable_y = ppuIO.IsBitSet(ppuIO.CTRL, 1) and 1 or 0
+            loopy:WriteControl(data)
             if loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1, loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine)) end
             if debugPPU2000 then print(string.format("%i, Write PPU 2000 nameX:%x nameY:%x BackGroundTable:%x SpriteTable:%x",
                 loopy.scanLine, loopy.nametable_x, loopy.nametable_y, ppuIO.BackgroundTable, ppuIO.SpriteTable)) end
@@ -73,8 +70,7 @@ local CPURegisters = {
             return nil
         end, -- mask
         [0x0002] = function (addr, data)
-            scrollPPULatch = 0 -- reset address latch 
-            scrollPPULatch = 0 -- reset ppu addr latch 
+            loopy:ResetWriteToggle()
             if debugPPU then print(string.format("Write PPU 2002 %x %x", addr, data)) end
             return nil
         end, -- status
@@ -89,25 +85,12 @@ local CPURegisters = {
             return nil
         end, -- OAM Data
         [0x0005] = function (addr, data)
-            if scrollPPULatch == 0 then
-                loopy.fine_x = bit.band(data, 0x07)
-                loopy.course_x = bit.rshift(data, 3)
-                scrollPPULatch = 1
+            if loopy.w == 0 then
+                loopy:WriteScroll(data)
                 if debugPPU2005 then print(string.format("%i, Write PPU 2005.1 fineX:%x courseX:%x data %x ",
                     loopy.scanLine, loopy.fine_x, loopy.course_x, data)) end
             else
-                local tempCourseY =  bit.rshift(bit.band(data, 0xF8), 3)
-                local tempFineY = bit.band(data, 0x07)
-                if  loopy.scanLine > 241 then
-                    loopy.fine_y = tempFineY
-                    loopy.course_y = tempCourseY
-                    --ppuIO.CTRL = bit.bor(ppuIO.CTRL, 0x80) 
-                end
-                if tempCourseY == 0x1D and loopy.scanLine == 194 then -- Special Case for SMB3 This must cause a roll over 
-                    loopy.fine_y = tempFineY
-                    loopy.course_y = tempCourseY
-                end
-                scrollPPULatch = 0
+                loopy:WriteScroll(data)
                 -- Tigger Save State 
     --print("2005 " .. loopy.scanLine, loopy.register_vram_addr)
                 if loopy.scanLine > 0 and loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine  -1, loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine)) end
@@ -121,37 +104,28 @@ local CPURegisters = {
             return nil
         end, -- Scroll
         [0x0006] = function (addr, data)
-            if scrollPPULatch == 0 then
-                -- shift just the top 
-                trimaddr = bit.bor(bit.lshift(bit.band(data,0x3F),8), bit.band(trimaddr, 0x00FF))
-                loopy.nametable_x = bit.rshift(bit.band(data,0x4), 2)
-                loopy.nametable_y = bit.rshift(bit.band(data,0x8), 3)
-                loopy.fine_y = bit.rshift(bit.band(data,0x30), 4)
-                scrollPPULatch = 1
+            if loopy.w == 0 then
+                loopy:WriteAddress(data)
                 
                 if debugPPU2006 then print(string.format("%i, Write PPU 2006.1 nameX:%x nameY:%x trimaddr %x data %x pointer:%04x",
-                    loopy.scanLine, loopy.nametable_x, loopy.nametable_y, trimaddr, data, loopy.register_vram_addr)) end
+                    loopy.scanLine, bit.rshift(bit.band(loopy.t, 0x0400), 10), bit.rshift(bit.band(loopy.t, 0x0800), 11), loopy.t, data, loopy.v)) end
             else
-                -- shift the lower 
-                trimaddr = bit.bor(bit.band(trimaddr,0xFF00), data)
-                loopy.register_tram_addr = trimaddr -- set oam Pointer 
-                loopy.register_vram_addr = loopy.register_tram_addr
-                local offsetY = bit.rshift(bit.band(loopy.register_vram_addr, 0x3E0),5)
-                scrollPPULatch = 0
+                loopy:WriteAddress(data)
     --print(" 2006 " .. loopy.scanLine, offsetY, loopy.register_vram_addr)
-                if loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1 , loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine, 0, true)) end
+                local splitCoarseY = bit.rshift(bit.band(loopy.v, 0x03E0), 5)
+                if loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1 , loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine, splitCoarseY, true)) end
                 if debugPPU2006 then print(string.format("%i, Write PPU 2006.2 nameX:%x nameY:%x trimaddr %x data %x pointer:%04x",
-                    loopy.scanLine, loopy.nametable_x, loopy.nametable_y, trimaddr, data, loopy.register_vram_addr)) end
+                    loopy.scanLine, loopy.nametable_x, loopy.nametable_y, loopy.t, data, loopy.v)) end
             end
             --print(string.format("PPU %x %x", addr, data))
             return nil
         end, -- PPU Address
         [0x0007] = function (addr, data)
-            ppuBus.PPUWrite(loopy.register_vram_addr, data)
+            ppuBus.PPUWrite(loopy.v, data)
             if ppuIO.IsBitSet(ppuIO.CTRL, 2) then
-                loopy.register_vram_addr = loopy.register_vram_addr + 32
+                loopy:IncrementV(32)
             else
-                loopy.register_vram_addr = loopy.register_vram_addr + 1
+                loopy:IncrementV(1)
             end
             if false then print(string.format("Write PPU 2007 %x, %x, %x, %s", addr, data, loopy.register_vram_addr ,tostring(ppuIO.IsBitSet(ppuIO.CTRL, 2)))) end
             return nil
@@ -240,18 +214,14 @@ end
 
     function ppuBus.GetSaveState()
         return {
-            scrollPPULatch = scrollPPULatch,
             ppu_data_buffer = ppu_data_buffer,
-            trimaddr = trimaddr,
             vRamAddress = vRamAddress
         }
     end
 
     function ppuBus.LoadSaveState(state)
         if not state then return end
-        scrollPPULatch = state.scrollPPULatch or 0
         ppu_data_buffer = state.ppu_data_buffer or 0x00
-        trimaddr = state.trimaddr or 0x00
         vRamAddress = state.vRamAddress or 0x00
     end
 return ppuBus

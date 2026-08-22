@@ -95,6 +95,10 @@ local function updateSaveTable()
 
         table.LOOPY                     = table.LOOPY or {}
         table.LOOPY.ppuStates           = loopy.ppuStates
+        table.LOOPY.v                   = loopy.v
+        table.LOOPY.t                   = loopy.t
+        table.LOOPY.x                   = loopy.x
+        table.LOOPY.w                   = loopy.w
         table.LOOPY.fine_x              = loopy.fine_x
         table.LOOPY.course_x            = loopy.course_x
         table.LOOPY.fine_y              = loopy.fine_y
@@ -199,16 +203,9 @@ local function Merge(data)
     end
     if data.LOOPY then
         loopy.ppuStates          = data.LOOPY.ppuStates or loopy.ppuStates
-        loopy.fine_x             = data.LOOPY.fine_x
-        loopy.course_x           = data.LOOPY.course_x
-        loopy.fine_y             = data.LOOPY.fine_y
-        loopy.course_y           = data.LOOPY.course_y
-        loopy.nametable_x        = data.LOOPY.nametable_x
-        loopy.nametable_y        = data.LOOPY.nametable_y
+        loopy:RestoreScroll(data.LOOPY)
         loopy.drawScreen         = data.LOOPY.drawScreen
         loopy.drawSprites        = data.LOOPY.drawSprites
-        loopy.register_vram_addr = data.LOOPY.register_vram_addr
-        loopy.register_tram_addr = data.LOOPY.register_tram_addr
         loopy.scanLine           = data.LOOPY.scanLine or loopy.scanLine
         loopy.scanLinePixels     = data.LOOPY.scanLinePixels or loopy.scanLinePixels
         loopy.inVBlank           = data.LOOPY.inVBlank or false

@@ -6,7 +6,10 @@ local sleepTime = 0
 local timerForFPS = 0
 local desiredFrameTime = 1 / 61.0
 local lastFrameTime = 0
-displayTimer.isDelaySkipped = false
+-- conf.lua already enables VSync. Sleeping here as well can miss a refresh
+-- boundary, producing ~57 FPS, uneven motion, and slow audio even when the
+-- emulator workload is comfortably below 16.7 ms.
+displayTimer.isDelaySkipped = true
 local currentAverage = 0.0
 local alpha = 0.01  -- This is the smoothing factor, usually a small value
 local maxFUT = 0.0

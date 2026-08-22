@@ -39,7 +39,6 @@ end
 
 local band, bor = bit.band, bit.bor
 local vBlankFlag = false
-local NMIArmed = false
 local scanLinePixels
 local scanLines
 local CTRL
@@ -47,8 +46,6 @@ local STATUS
 local Sprite0Scanline
 local ppuCycles
 local debug = false
-local scanLineHit = false
-
 ppu.DrawScreen = false
 --# Main Update PPU Cycle
 function ppu.Update(cpuCycles)
@@ -58,72 +55,128 @@ function ppu.Update(cpuCycles)
     CTRL = ppuIO.CTRL
     scanLines = ppu.scanLines
     scanLinePixels = ppu.scanLinePixels
-    NMIArmed = ppuIO.NMIArmed621828621828
-    while ppuCycles > 0 and not ppu.vBlankEnd do
-        if scanLines == 2 and scanLinePixels == 0 then
-            ppu.clearPPUStates()
-            ppu.DrawScreen = false
-            if debug then print( ) print("Start Of Frame") end
-            ppu.savePPUStates(0)
+    local nmiArmed = ppuIO.NMIArmed
+    -- CPU register writes only occur between ppu.Update calls, so this value is
+    -- constant for this small batch of PPU dots.
+    local renderingEnabled = band(ppuIO.MASKS, 0x18) ~= 0
+
+    if scanLines == 0 and scanLinePixels == 0 then
+        ppu.clearPPUStates()
+        ppu.DrawScreen = false
+        if debug then
+            print()
+            print("Start Of Frame")
+            print("---Start PPU courseX" .. loopy.course_x)
         end
-        --% Increment scanline pixel count
-        if debug and scanLinePixels == 0 and scanLines == 0 then
-            print("---Start PPU courseX"..loopy.course_x)
-        end
-        scanLinePixels = scanLinePixels + 1
-        loopy.scanLine = scanLines
-        loopy.scanLinePixels = scanLinePixels
-        --& Check if the first sprite of the scanline is visible
-        if scanLines > 8 and scanLines < 241 and scanLines == Sprite0Scanline + ppu.sprite0Offset and not (band(STATUS, 0x40) > 0) then
-            STATUS = bor(STATUS, 0x40)
-            STATUS = bor(STATUS, 0x20)
-            if debug then print("#Sprite0 Hit Scanline "..Sprite0Scanline) end
-        end
-        
-        --& Check if we've reached the end of a scanline
-        if scanLinePixels >= 341 then
-            scanLinePixels = 0
-            scanLines = scanLines + 1
-            if scanLines >= 0 and scanLines <= 239 and loopy.drawScreen then ppuBus.ppuScanLineUpdate(scanLines) end -- 241 lines total 
-        end
-        --& Check if we're in vBlank
-        if scanLines >= 241 then
-            --& Set NMI After VBlank Start by 3 Pixels -- Fixed Solomons Keys Startup
-            if ppuIO.NMIArmed and STATUS >= 0x80 and CTRL >= 0x80 then
-                --* Set CPU NMI
-                cpuMemory.TriggerNMI = true
-                ppuIO.NMIArmed = false
-                if debug then print("NMI Triggered") end
-            end
-            --& Start VBlank if we're on the first Pixel of the 241st scanline
-            if scanLines == 241 and scanLinePixels == 1 and STATUS < 0x80 and vBlankFlag == false then
+        ppu.savePPUStates(0)
+    end
+
+    -- Enabling NMI during an already-active vblank takes effect at the next
+    -- PPU update boundary. The normal vblank-start edge is handled at dot 2.
+    if nmiArmed and scanLines >= 241 and scanLines < 261
+        and STATUS >= 0x80 and CTRL >= 0x80 then
+        cpuMemory.TriggerNMI = true
+        nmiArmed = false
+    end
+
+    local spriteHitScanline = Sprite0Scanline + ppu.sprite0Offset
+    while ppuCycles > 0 do
+        -- No CPU or PPU register access occurs inside this batch. Jump directly
+        -- to the end of the batch/scanline and process only event dots crossed
+        -- along the way instead of iterating over every PPU dot.
+        local oldPixel = scanLinePixels
+        local dots = math.min(ppuCycles, 341 - oldPixel)
+        local newPixel = oldPixel + dots
+
+        -- Dot 1 events.
+        if oldPixel < 1 and newPixel >= 1 then
+            if scanLines == 261 then
+                vBlankFlag = false
+                loopy.inVBlank = false
+                STATUS = band(STATUS, 0x1F)
+                if debug then print("---VBlank End / Pre-render") end
+            elseif scanLines == 241 and STATUS < 0x80 and not vBlankFlag then
                 vBlankFlag = true
                 loopy.inVBlank = true
                 if debug then print("#VBlank Start") end
                 ppu.savePPUStates(241)
-                STATUS = bor(STATUS,0x80)
+                STATUS = bor(STATUS, 0x80)
+            elseif scanLines > 8 and scanLines < 241
+                and scanLines == spriteHitScanline
+                and band(STATUS, 0x40) == 0 then
+                STATUS = bor(STATUS, 0x60)
+                if debug then print("#Sprite0 Hit Scanline " .. Sprite0Scanline) end
             end
-            --& Check if vBlank has ended
-            if scanLines >= 261 and vBlankFlag == true then
-                if debug then print("---VBlank End \n") end
-                vBlankFlag = false
-                loopy.inVBlank = false
-                STATUS = 0x00
-                ppuCycles = ppuCycles - 1
+        end
+
+        -- The normal vblank NMI edge follows vblank start.
+        if scanLines == 241 and oldPixel < 2 and newPixel >= 2
+            and nmiArmed and STATUS >= 0x80 and CTRL >= 0x80 then
+            cpuMemory.TriggerNMI = true
+            nmiArmed = false
+            if debug then print("NMI Triggered") end
+        end
+
+        -- Rendering reloads horizontal scroll for the next scanline at dot 257.
+        if renderingEnabled and oldPixel < 257 and newPixel >= 257
+            and (scanLines == 261 or (scanLines >= 0 and scanLines <= 239)) then
+            local oldHorizontal = band(loopy.v, 0x041F)
+            loopy:CopyHorizontalTToV()
+
+            -- The screen is rendered after the frame from saved PPU states.
+            -- A $2005/$2000 write changes t first, so the state saved at the
+            -- write still contains the old coarse-X/nametable-X from v.  Once
+            -- dot 257 performs the real t -> v reload, replace that scanline's
+            -- state so the following rendered line sees the new horizontal
+            -- origin.  Avoid recording the normal no-change reload each line.
+            if scanLines >= 0 and scanLines <= 239
+                and oldHorizontal ~= band(loopy.v, 0x041F) then
+                loopy:SearchPPUStatesInRangeAndReplace(
+                    scanLines,
+                    scanLines,
+                    ppu.GetPPUState(scanLines)
+                )
+            end
+        end
+
+        -- During dots 280-304 the pre-render line applies vertical scroll. t is
+        -- constant inside this batch, so one copy for the intersecting span is
+        -- equivalent to repeating the same copy on every included dot.
+        if renderingEnabled and scanLines == 261
+            and oldPixel < 304 and newPixel >= 280 then
+            loopy:CopyVerticalTToV()
+        end
+
+        scanLinePixels = newPixel
+        ppuCycles = ppuCycles - dots
+
+        -- Check if we've reached the end of a scanline.
+        if scanLinePixels >= 341 then
+            scanLinePixels = 0
+            scanLines = scanLines + 1
+            if scanLines >= 0 and scanLines <= 239 and loopy.drawScreen then ppuBus.ppuScanLineUpdate(scanLines) end -- 241 lines total
+
+            -- Scanline 261 must finish so its scroll transfers can run.
+            if scanLines > 261 then
                 ppu.scanLines = -1
                 ppu.scanLinePixels = 0
+                ppuIO.STATUS = STATUS
+                ppuIO.NMIArmed = nmiArmed
+                loopy.scanLine = 261
+                loopy.scanLinePixels = 341
                 ppu.StartGameWindow()
                 ppu.currentFrame = ppu.currentFrame + 1
                 if debug then print("End Of Frame") end
                 return false
             end
         end
-        --* Decrement cycle count
-        ppuCycles = ppuCycles - 1
     end
     ppu.scanLines = scanLines
     ppu.scanLinePixels = scanLinePixels
+    loopy.scanLine = scanLines
+    loopy.scanLinePixels = scanLinePixels
     ppuIO.STATUS = STATUS
+    ppuIO.NMIArmed = nmiArmed
     return true
 end
 
@@ -146,13 +199,16 @@ function ppu.GetPPUState(scanLine, offset, is2006)
     local state = {
         scanLine            = scanLine,
         spriteTileSet       = getCachedTileSet(),
-        fineOffset_x        = loopy.fine_x,
-        offset_x            = loopy.course_x,
-        namespace_x         = loopy.nametable_x,
-        fineOffset_y        = loopy.fine_y,
-        offset_y            = loopy.course_y,
-        namespace_y         = loopy.nametable_y,
-        ppuAddress          = loopy.register_vram_addr,
+        fineOffset_x        = loopy.x,
+        offset_x            = band(loopy.v, 0x001F),
+        namespace_x         = bit.rshift(band(loopy.v, 0x0400), 10),
+        fineOffset_y        = bit.rshift(band(loopy.v, 0x7000), 12),
+        offset_y            = bit.rshift(band(loopy.v, 0x03E0), 5),
+        namespace_y         = bit.rshift(band(loopy.v, 0x0800), 11),
+        ppuAddress          = loopy.v,
+        v                   = loopy.v,
+        t                   = loopy.t,
+        x                   = loopy.x,
         spriteTable         = ppuIO.SpriteTable,
         backgroundTable     = ppuIO.BackgroundTable,
         mirror              = cart.Mirror,
@@ -169,13 +225,16 @@ function ppu.savePPUStates(scanLine, offset, is2006)
     local state = {
         scanLine            = scanLine,
         spriteTileSet       = getCachedTileSet(),
-        fineOffset_x        = loopy.fine_x,
-        offset_x            = loopy.course_x,
-        namespace_x         = loopy.nametable_x,
-        fineOffset_y        = loopy.fine_y,
-        offset_y            = loopy.course_y,
-        namespace_y         = loopy.nametable_y,
-        ppuAddress          = loopy.register_vram_addr,
+        fineOffset_x        = loopy.x,
+        offset_x            = band(loopy.v, 0x001F),
+        namespace_x         = bit.rshift(band(loopy.v, 0x0400), 10),
+        fineOffset_y        = bit.rshift(band(loopy.v, 0x7000), 12),
+        offset_y            = bit.rshift(band(loopy.v, 0x03E0), 5),
+        namespace_y         = bit.rshift(band(loopy.v, 0x0800), 11),
+        ppuAddress          = loopy.v,
+        v                   = loopy.v,
+        t                   = loopy.t,
+        x                   = loopy.x,
         spriteTable         = ppuIO.SpriteTable,
         backgroundTable     = ppuIO.BackgroundTable,
         mirror              = cart.Mirror,

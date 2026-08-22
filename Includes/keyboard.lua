@@ -157,7 +157,15 @@ local keypressed = {
             love.window.setMode(1600, 800)
         end
     end,
-    ["k"] = function() Profile = not Profile end,
+    ["k"] = function()
+        Profile = not Profile
+        -- The sampling profiler disables and flushes LuaJIT. Restore it when
+        -- profiling is turned off so emulation does not remain permanently slow.
+        if not Profile and rawget(_G, "jit") then
+            jit.on()
+            jit.flush()
+        end
+    end,
     [""] = function() end,
 
 }

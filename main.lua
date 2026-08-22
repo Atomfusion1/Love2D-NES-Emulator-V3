@@ -21,6 +21,20 @@ UseSound                = true      --# enable disable sound
 EnableDebug             = false     --# enable Debug 
 Profile                 = false     --# enable Profiling
 
+-- NTSC NES timing is independent of the monitor refresh rate.  Keep emulation
+-- on a fixed clock and let love.draw present the newest completed frame.
+local NTSC_FRAME_RATE    = 60.0988
+local NTSC_FRAME_TIME    = 1 / NTSC_FRAME_RATE
+local NTSC_CPU_CYCLES    = 29781
+local emulationTime      = 0
+local MAX_CATCHUP_FRAMES = 4
+
+local function RunEmulatedFrame()
+    if Profile then profile.start() end
+    apu.TimerCheck(NTSC_FRAME_TIME)
+    cpu.ExecuteCycles(NTSC_CPU_CYCLES)
+end
+
 --& Run Once on Load
 function love.load()
     love.graphics.setDefaultFilter("nearest", "nearest")
@@ -32,20 +46,33 @@ end
 --& Main Update Loop
 function love.update(dt)
     loveSpeed.StartTimer()  --* Start us Timer
-    if Profile then profile.start() end
     keyboard.Update(dt)     --* Keyboard Update
-    apu.TimerCheck(dt)      --* Audio Update 
     local activeMapper = mapper[cart.mapper] and mapper[cart.mapper].mapper
     if activeMapper and activeMapper.UpdateBatterySave then
         activeMapper.UpdateBatterySave()
     end
     if G_SkipFrameAfterStateLoad then
         G_SkipFrameAfterStateLoad = false
+        emulationTime = 0
         return
     end
     --* CPU Execution
     if G_CPUStep == 2 then      --# 2 = 1 frame at a time
-        cpu.ExecuteCycles(29780) -- 29780 is one frame but Changing this 
+        if OverRideSpeed then
+            emulationTime = 0
+            RunEmulatedFrame()
+            return
+        end
+
+        -- Clamp long pauses so restoring/moving the window does not trigger a
+        -- large burst of catch-up frames and audio state changes.
+        emulationTime = emulationTime + math.min(dt, NTSC_FRAME_TIME * MAX_CATCHUP_FRAMES)
+        local framesRun = 0
+        while emulationTime >= NTSC_FRAME_TIME and framesRun < MAX_CATCHUP_FRAMES do
+            RunEmulatedFrame()
+            emulationTime = emulationTime - NTSC_FRAME_TIME
+            framesRun = framesRun + 1
+        end
     elseif G_CPUStep == 1 then  --# 1 = 1 cycle at a time
         cpu.ExecuteCycles(1)
         G_CPUStep = 0

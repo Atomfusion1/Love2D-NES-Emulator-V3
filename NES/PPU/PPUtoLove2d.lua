@@ -146,7 +146,8 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
     local state = states[1] -- Start on First State
     
     -- Calculate the starting nametable “namespace”
-    local baseNametable = state.namespace_x * 0x400 + state.namespace_y * 0x800 + 0x2000
+    local nametableX = state.namespace_x
+    local nametableY = state.namespace_y
     
     -- The coarse scroll (tile offset)
     local coarseScrollX = state.offset_x
@@ -167,13 +168,15 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
     local baseScreenY = -fineYOffset
     local screenY = 0
     -- The NES background is drawn as a grid of 30 rows and (–1 to 31) columns 
-    for tileY = 0, 29 do
+    -- Include one extra source row so fine-Y scrolling still covers line 239.
+    for tileY = 0, 30 do
         for fineY = 0, 7 do  -- each tile has 8 scanlines
             -- If the scanline crosses a state change (scroll change, etc.), load the next state:
             if scanLine < 241 and states[ppuIRQCount + 1] and scanLine == states[ppuIRQCount + 1].scanLine + scanLineOffset then
                 ppuIRQCount = ppuIRQCount + 1
                 state = states[ppuIRQCount]
-                baseNametable = state.namespace_x * 0x400 + state.namespace_y * 0x800 + 0x2000
+                nametableX = state.namespace_x
+                nametableY = state.namespace_y
                 coarseScrollX = state.offset_x
                 coarseScrollY = state.offset_y -- astynax is -`- 20
                 fineXOffset = state.fineOffset_x
@@ -185,14 +188,20 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                 baseScreenX = -fineXOffset
                 baseScreenY = -fineYOffset
                 if state.is2006 then
-                    -- i need to solve the diffrence from offsetY and tileY 22
+                    -- A completed $2006 write provides the current source row,
+                    -- while this renderer stores a top-of-screen Y origin.
                     local holder = tileY - state.offsetY
                     coarseScrollY = -holder
-                    --print("using 2006 "..tileY.." ".. state.offsetY.." "..coarseScrollY)
-                    state.is2006 = false
-                    --print(scanLine .. coarseScrollY * 8 + fineYOffset .. " " .. tileY * 8 )
                 end
             end
+
+            -- Coarse Y is not modulo 30. Rows 30/31 deliberately read the
+            -- attribute bytes as tile IDs, and 31 wraps without changing NT Y.
+            local tileYIndex, effectiveNametableY = loopy.AdvanceVertical(
+                coarseScrollY,
+                nametableY,
+                screenY
+            )
 
             -- Loop over horizontal tile columns (from -1 to 31)
             for tileX = -1, 31 do
@@ -203,15 +212,21 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                 -- Compute which tile from the background nametable we need:
                 -- (Here we combine the current tile index with the coarse scroll.)
                 local scrollTileX = tileX + coarseScrollX
-                local scrollTileY = screenY + coarseScrollY
+                local effectiveNametableX = nametableX
+                local tileXIndex = scrollTileX
+                -- This loop draws at most one tile beyond either side, so the
+                -- horizontal origin can cross only one nametable boundary.
+                if tileXIndex < 0 then
+                    tileXIndex = tileXIndex + 32
+                    effectiveNametableX = 1 - effectiveNametableX
+                elseif tileXIndex >= 32 then
+                    tileXIndex = tileXIndex - 32
+                    effectiveNametableX = 1 - effectiveNametableX
+                end
 
-                -- The following “addon” values handle the wrap‑around
-                local addonNamespaceX = (scrollTileX >= 32) and 0x400 or 0
-                local addonNamespaceY = (scrollTileY >= 30) and 0x800 or 0
-                local tileXIndex = (scrollTileX >= 32) and scrollTileX - 32 or scrollTileX
-                local tileYIndex = (scrollTileY >= 30) and scrollTileY - 30 or scrollTileY
-
-                local localNamespace = baseNametable + addonNamespaceX + addonNamespaceY
+                local localNamespace = 0x2000
+                    + effectiveNametableX * 0x400
+                    + effectiveNametableY * 0x800
                 local tileID, attributeValue = calculateTileAndAttributeAddresses(tileXIndex, tileYIndex, localNamespace)
 
                 -- Look up the proper tile row data for this scanline (fineY)
