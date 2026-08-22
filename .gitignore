@@ -27,6 +27,7 @@ RestorePoints/
 
 # ROMs (optional - uncomment if you want to exclude them)
 Roms/
+/Emulator/nesEmuState.txt
 
 # Debug/Profiling
 *.prof

@@ -23,6 +23,41 @@ local function CloseFile(file)
     file:close()
 end
 
+-- Read enough of an iNES header to decide whether this emulator can load the
+-- cartridge.  This is deliberately non-mutating so a rejected ROM cannot
+-- replace the cartridge that is currently running.
+function cartridge.ParseHeader(headerData)
+    if not headerData or #headerData < 16 then
+        return nil, "The file is too small to contain an iNES header."
+    end
+    if headerData:sub(1, 4) ~= "NES\26" then
+        return nil, "The file does not contain a valid iNES header."
+    end
+
+    local flags6 = headerData:byte(7)
+    local flags7 = headerData:byte(8)
+    return {
+        mapper = bit.band(flags7, 0xF0) + bit.rshift(bit.band(flags6, 0xF0), 4),
+        mirror = bit.band(flags6, 0x01),
+        battery = bit.band(flags6, 0x02) ~= 0,
+    }
+end
+
+function cartridge.Inspect(filepath)
+    if not filepath or filepath == "" then
+        return nil, "No ROM file was selected."
+    end
+
+    local file, openError = io.open(filepath, "rb")
+    if not file then
+        return nil, "Unable to open ROM: " .. tostring(openError)
+    end
+
+    local headerData = file:read(16)
+    CloseFile(file)
+    return cartridge.ParseHeader(headerData)
+end
+
 --# Check for NES Header
 function IsFileHeader(filepath)
     local IsHeaderFound = false

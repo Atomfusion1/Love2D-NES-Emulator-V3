@@ -22,6 +22,7 @@ G_CPUStep               = 2         --# 1 = 1 cycle, 2 = 1 frame
 UseSound                = true      --# enable disable sound
 EnableDebug             = false     --# enable Debug 
 Profile                 = false     --# enable Profiling
+EmulationReady          = false     --# true after a supported cartridge loads
 
 -- NTSC NES timing is independent of the monitor refresh rate.  Keep emulation
 -- on a fixed clock and let love.draw present the newest completed frame.
@@ -49,6 +50,10 @@ end
 function love.update(dt)
     loveSpeed.StartTimer()  --* Start us Timer
     keyboard.Update(dt)     --* Keyboard Update
+    if not EmulationReady then
+        emulationTime = 0
+        return
+    end
     local activeMapper = mapper[cart.mapper] and mapper[cart.mapper].mapper
     if activeMapper and activeMapper.UpdateBatterySave then
         activeMapper.UpdateBatterySave()
@@ -84,7 +89,9 @@ end
 --& Draw Screen
 function love.draw()
     DebugDraw()                 --* Debug Tiles and Window 
-    pputolove.GameWindow()
+    if EmulationReady then
+        pputolove.GameWindow()
+    end
     selectFile.DrawPopup()
     loveSpeed.DisplayScreen()   --* Display us Timer 
     cpu.drawFrame = false
@@ -111,6 +118,36 @@ end
 
 --# Initialize Cartridge
 function Initialize (file)
+    local totalfile = LoveFileDir .. tostring(file or "")
+    local romInfo, inspectError = cart.Inspect(totalfile)
+    if not romInfo then
+        local message = "Cannot load " .. tostring(file or "(no file)") .. ": " .. inspectError
+        print(message)
+        selectFile.ShowError(message)
+        return false, message
+    end
+
+    local mapperEntry = mapper[romInfo.mapper]
+    if not mapperEntry or not mapperEntry.mapper then
+        local supported = {}
+        for mapperId, entry in pairs(mapper) do
+            if entry and entry.mapper then
+                supported[#supported + 1] = mapperId
+            end
+        end
+        table.sort(supported)
+
+        local message = string.format(
+            "Unsupported mapper %d for %s. Supported mappers: %s",
+            romInfo.mapper,
+            tostring(file),
+            table.concat(supported, ", ")
+        )
+        print(message)
+        selectFile.ShowError(message)
+        return false, message
+    end
+
     local activeMapper = cart.mapper and mapper[cart.mapper] and mapper[cart.mapper].mapper
     if activeMapper and activeMapper.FlushBatterySave then
         activeMapper.FlushBatterySave()
@@ -120,10 +157,9 @@ function Initialize (file)
         print("") --* Clear Section of Console
     end
     print(file)
-    local totalfile = LoveFileDir .. file
     cart.Initialize(totalfile) --* setup for mappers --
     print("mapper loaded:" .. cart.mapper)
-    mapper[cart.mapper].mapper.INI()
+    mapperEntry.mapper.INI()
     bus.RefreshMapperCache()  -- Cache mapper functions for hot-path optimization
     cpuRAM.Reset()
     controller.Reset()
@@ -135,6 +171,9 @@ function Initialize (file)
     emulationTime = 0
     apu.Initialize()
     cpu.Initialize()
+    EmulationReady = true
+    selectFile.ClearError()
+    return true
 end
 
 --^ This Uses VSCode BetterComments Colors 

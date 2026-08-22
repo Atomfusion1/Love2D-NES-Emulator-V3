@@ -15,6 +15,33 @@ local ppuBus    = require("NES.PPU.ppuBus")
 
 local saveState = {}
 
+local function copyNumericTable(destination, source)
+    if not source then return end
+    for key in pairs(destination) do
+        if type(key) == "number" then destination[key] = nil end
+    end
+    for key, value in pairs(source) do
+        if type(key) == "number" then destination[key] = value end
+    end
+end
+
+local function snapshotRange(source, first, last, defaultValue)
+    local snapshot = {}
+    for index = first, last do
+        local value = source[index]
+        snapshot[index] = value == nil and defaultValue or value
+    end
+    return snapshot
+end
+
+local function restoreRange(destination, source, first, last, defaultValue)
+    if not source then return end
+    for index = first, last do
+        local value = source[index]
+        destination[index] = value == nil and defaultValue or value
+    end
+end
+
 local  function createSaveState(table, FILE)
     print("CreateSave "..FILE)
     -- Write the save state data to a file
@@ -50,7 +77,10 @@ local function updateSaveTable()
         table.CPU.NMIInterrupt    =     cpuMemory.NMIInterrupt
         table.CPU.BRKInterrupt    =     cpuMemory.BRKInterrupt
         table.CPU.CHRLocation     =     cpuMemory.CHRLocation
-        table.CPU.RAM             =     cpuRAM.cpuRAM
+        table.CPU.RAM             =     {}
+        for address, value in pairs(cpuRAM.cpuRAM) do
+            if type(address) == "number" then table.CPU.RAM[address] = value end
+        end
 
         -- Legacy MMC1 fields are kept so old .save files still load.
         table.PPU.nCHRBankSelect4Lo     = activeMapper.nCHRBankSelect4Lo
@@ -66,8 +96,11 @@ local function updateSaveTable()
         table.PPU.prgRAM                = activeMapper.prgRAM
         table.PPU.chrRAM                = activeMapper.chrRAM
         table.PPU.memory                = ppu.memory
-        table.PPU.tblName               = nameTable.tblName
-        table.PPU.tblPallette           = nameTable.tblPalette
+        table.PPU.tblName               = {
+            [0] = snapshotRange(nameTable.tblName[0], 0, 0x03FF, 0x00),
+            [1] = snapshotRange(nameTable.tblName[1], 0, 0x03FF, 0x00)
+        }
+        table.PPU.tblPallette           = snapshotRange(nameTable.tblPalette, 0, 0x1F, 0x00)
         table.PPU.scanLines             = ppu.scanLines
         table.PPU.scanLinePixels        = ppu.scanLinePixels
         table.PPU.currentFrame          = ppu.currentFrame
@@ -76,7 +109,7 @@ local function updateSaveTable()
 
         table.CART.Mirror               = cart.Mirror
         table.CART.mapper               = cart.mapper
-        table.OAM.OAM                   = ppuOAM.OAM
+        table.OAM.OAM                   = snapshotRange(ppuOAM, 0, 0xFF, 0xF8)
         table.PPUIO.NameTableAddress    = ppuIO.NameTableAddress
         table.PPUIO.BackgroundTable     = ppuIO.BackgroundTable
         table.PPUIO.SpriteTable         = ppuIO.SpriteTable
@@ -157,7 +190,9 @@ local function Merge(data)
     cpuMemory.NMIInterrupt    = data.CPU.NMIInterrupt
     cpuMemory.BRKInterrupt    = data.CPU.BRKInterrupt
     cpuMemory.CHRLocation     = data.CPU.CHRLocation
-    cpuRAM.cpuRAM             = data.CPU.RAM
+    -- Preserve table identities: the CPU bus and PPU nametable module cache
+    -- these tables. Replacing them leaves those modules reading reset memory.
+    copyNumericTable(cpuRAM.cpuRAM, data.CPU.RAM)
     --PPU
     if data.MAPPER and data.MAPPER.state and activeMapper.LoadSaveState then
         activeMapper.LoadSaveState(data.MAPPER.state)
@@ -175,15 +210,22 @@ local function Merge(data)
         activeMapper.nLoadRegisterCount   = data.PPU.nLoadRegisterCount
     end
     ppu.memory                                      = data.PPU.memory
-    nameTable.tblName                               = data.PPU.tblName
-    nameTable.tblPalette                            = data.PPU.tblPallette
+    if data.PPU.tblName then
+        restoreRange(nameTable.tblName[0], data.PPU.tblName[0], 0, 0x03FF, 0x00)
+        restoreRange(nameTable.tblName[1], data.PPU.tblName[1], 0, 0x03FF, 0x00)
+    end
+    restoreRange(nameTable.tblPalette, data.PPU.tblPallette, 0, 0x1F, 0x00)
     ppu.scanLines                                  = data.PPU.scanLines or ppu.scanLines
     ppu.scanLinePixels                             = data.PPU.scanLinePixels or ppu.scanLinePixels
     ppu.currentFrame                               = data.PPU.currentFrame or ppu.currentFrame
     ppu.vBlankEnd                                  = data.PPU.vBlankEnd or false
     ppu.DrawScreen                                 = data.PPU.DrawScreen or false
     cart.Mirror                                     = data.CART.Mirror
-    ppuOAM.OAM                                      = data.OAM.OAM
+    -- Older snapshots accidentally saved no OAM because ppuOAM is already the
+    -- OAM table (there is no nested .OAM table). New snapshots restore in place.
+    if data.OAM then
+        restoreRange(ppuOAM, data.OAM.OAM or data.OAM, 0, 0xFF, 0xF8)
+    end
     if data.PPUIO then
         ppuIO.NameTableAddress                        = data.PPUIO.NameTableAddress
         ppuIO.BackgroundTable                         = data.PPUIO.BackgroundTable

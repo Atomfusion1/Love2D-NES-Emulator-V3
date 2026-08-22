@@ -4,6 +4,7 @@ local joystick1 = joysticks[1]
 local selectFile = {}
 selectFile.input = ""
 selectFile.isPopupVisible = false
+selectFile.errorMessage = nil
 local files_per_column = 20
 local popupWidth = 700
 local popupHeight = 500
@@ -33,6 +34,15 @@ end
 
 listFilesInDirectory("roms")  -- Call this function once at the start
 
+function selectFile.ShowError(message)
+    selectFile.errorMessage = tostring(message)
+    selectFile.isPopupVisible = true
+end
+
+function selectFile.ClearError()
+    selectFile.errorMessage = nil
+end
+
 function selectFile.DrawPopup()
     if selectFile.isPopupVisible then
         local x = (love.graphics.getWidth() - popupWidth) / 2
@@ -44,6 +54,11 @@ function selectFile.DrawPopup()
 
         love.graphics.setColor(0, 0, 0)
         love.graphics.printf("Choose a game:", x, y + 10, popupWidth, "center")
+
+        if selectFile.errorMessage then
+            love.graphics.setColor(0.8, 0.05, 0.05)
+            love.graphics.printf(selectFile.errorMessage, x + 10, y + 35, popupWidth - 20, "center")
+        end
 
         local files = fileList
         local file_list_start_y = y + 100
@@ -87,6 +102,26 @@ local  function createSaveState(table, FILE)
     end
 end
 
+-- Keep the old cartridge and saved selection unless initialization succeeds.
+local function TrySelectFile(file)
+    print("Selected file: " .. file)
+    local filePath = "Roms/" .. file
+    local previousFileName = GlobalFileName
+    GlobalFileName = filePath
+
+    local loaded = Initialize(filePath)
+    if not loaded then
+        GlobalFileName = previousFileName
+        return false
+    end
+
+    local selectionFile = LoveFileDir .. "/Emulator/nesEmuState.txt"
+    print("SaveState: " .. filePath, selectionFile)
+    createSaveState(filePath, selectionFile)
+    selectFile.isPopupVisible = false
+    return true
+end
+
 function selectFile.MousePressed(x, y, button)
     if selectFile.isPopupVisible and button == 1 then
         local files = fileList
@@ -102,14 +137,7 @@ function selectFile.MousePressed(x, y, button)
             local file_y = file_list_start_y + row * file_list_spacing
         
             if x >= file_x and x <= file_x + popupWidth and y >= file_y and y <= file_y + file_list_spacing then
-                selectFile.isPopupVisible = false
-                print("Selected file: " .. file)
-                local new_file_path = LoveFileDir.."/Emulator/nesEmuState.txt"
-                local filePath = "Roms/" .. file
-                GlobalFileName = filePath
-                print("SaveState: "..filePath, new_file_path)
-                createSaveState(filePath , new_file_path)
-                Initialize(love.filesystem.read("Emulator/nesEmuState.txt"))
+                TrySelectFile(file)
                 break
             end
         end
@@ -146,13 +174,7 @@ local keypressed = {
     ["space"] = function()
         if selected_file_index > 0 and selected_file_index <= #files then
             local file = files[selected_file_index]
-            selectFile.isPopupVisible = false
-            print("Selected file: " .. file)
-            local new_file_path = LoveFileDir.."/Emulator/nesEmuState.txt"
-            local filePath = "Roms/" .. file
-            print("SaveState: "..filePath, new_file_path)
-            createSaveState(filePath , new_file_path)
-            Initialize(love.filesystem.read("Emulator/nesEmuState.txt"))
+            TrySelectFile(file)
         end
     end,
 }
@@ -225,13 +247,7 @@ local gamepadIsDown = {
     ["start"] = function()
         if selected_file_index > 0 and selected_file_index <= #files then
             local file = files[selected_file_index]
-            selectFile.isPopupVisible = false
-            print("Selected file: " .. file)
-            local new_file_path = LoveFileDir.."/Emulator/nesEmuState.txt"
-            local filePath = "Roms/" .. file
-            print("SaveState: "..filePath, new_file_path)
-            createSaveState(filePath , new_file_path)
-            Initialize(love.filesystem.read("Emulator/nesEmuState.txt"))
+            TrySelectFile(file)
         end
     end,
     ["rightshoulder"] = function()
