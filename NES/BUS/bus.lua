@@ -50,6 +50,23 @@ function bus.CPURead(addr)
     end
 end
 
+-- Debugger-only CPU read that never invokes register read side effects.
+function bus.CPUPeek(addr)
+    local CPURAM = memory.cpuRAM
+    local cartMapper = mapper[cart.mapper].mapper
+    if addr >= 0x4020 then
+        return cartMapper.CPURead(addr)
+    elseif addr < 0x2000 then
+        return CPURAM[band(addr, 0x07ff)]
+    elseif addr >= 0x2000 and addr <= 0x3FFF then
+        return ppuBus.CPUPeek(band(addr, 0x0007))
+    elseif addr >= 0x4000 and addr <= 0x401F then
+        if addr == 0x4015 then return 0x0F end
+        return 0
+    end
+    return 0
+end
+
 --# CPU BUS WRITE
 function bus.CPUWrite(addr, data)
     local CPUWrite = ppuBus.CPUWrite

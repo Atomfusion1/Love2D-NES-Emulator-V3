@@ -74,7 +74,12 @@ function PPUtoLove2d.DrawCHR(array, CHRTileSet, offset)
                     tile_msb = rshift(tile_msb, 1)
                     tile_lsb = rshift(tile_lsb, 1)
                     local pixelIndex = 4 * (x_offset + x + y_offset)
-                    Setup1DArray(0x3F00 + colorOffset * 4 + pixel, array, pixelIndex)
+                    -- Pixel value 0 is transparent/universal background on
+                    -- the NES; it always uses $3F00, not $3F04/$3F08/$3F0C.
+                    local paletteAddress = (pixel == 0)
+                        and 0x3F00
+                        or (0x3F00 + colorOffset * 4 + pixel)
+                    Setup1DArray(paletteAddress, array, pixelIndex)
                 end
             end
         end
@@ -141,81 +146,42 @@ printScanline = 100
 --! MAIN DRAW LOOP 
 --! ****************************
 function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
-    local ppuIRQCount = 1 -- starting state index
+    local ppuIRQCount = 1
     local states = loopy.ppuStates
-    local state = states[1] -- Start on First State
-    
-    -- Calculate the starting nametable “namespace”
-    local nametableX = state.namespace_x
-    local nametableY = state.namespace_y
-    
-    -- The coarse scroll (tile offset)
-    local coarseScrollX = state.offset_x
-    local coarseScrollY = state.offset_y
-    
-    -- The fine (pixel) offset inside a tile 
-    local fineXOffset = state.fineOffset_x
-    local fineYOffset = state.fineOffset_y
-    
-    local tileSet = state.spriteTileSet
-    local backgroundTable = state.backgroundTable
-    --cart.Mirror = state.mirror
+    local state = states[1]
+    if not state then return end
+    local nametableX, nametableY = state.namespace_x, state.namespace_y
+    local coarseScrollX, coarseScrollY = state.offset_x, state.offset_y
+    local fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
+    local tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
     local scanLineOffset = require("NES.PPU.ppu").scanLineOffset
     local scanLine = -1
-    -- Compute a “base screen origin” for tile drawing.
-    -- (These values tell you where the tile at (0,0) of the drawn grid goes on screen.)
-    local baseScreenX = -fineXOffset
-    local baseScreenY = -fineYOffset
+    local baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
     local screenY = 0
-    -- The NES background is drawn as a grid of 30 rows and (–1 to 31) columns 
-    -- Include one extra source row so fine-Y scrolling still covers line 239.
     for tileY = 0, 30 do
-        for fineY = 0, 7 do  -- each tile has 8 scanlines
-            -- If the scanline crosses a state change (scroll change, etc.), load the next state:
-            if scanLine < 241 and states[ppuIRQCount + 1] and scanLine == states[ppuIRQCount + 1].scanLine + scanLineOffset then
+        for fineY = 0, 7 do
+            if scanLine < 241 and states[ppuIRQCount + 1]
+                and scanLine == states[ppuIRQCount + 1].scanLine + scanLineOffset then
                 ppuIRQCount = ppuIRQCount + 1
                 state = states[ppuIRQCount]
-                nametableX = state.namespace_x
-                nametableY = state.namespace_y
-                coarseScrollX = state.offset_x
-                coarseScrollY = state.offset_y -- astynax is -`- 20
-                fineXOffset = state.fineOffset_x
-                fineYOffset = state.fineOffset_y
-                tileSet = state.spriteTileSet
-                backgroundTable = state.backgroundTable
+                nametableX, nametableY = state.namespace_x, state.namespace_y
+                coarseScrollX, coarseScrollY = state.offset_x, state.offset_y
+                fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
+                tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
                 cart.Mirror = state.mirror
-                -- Update the screen origin based on the new fine offsets
-                baseScreenX = -fineXOffset
-                baseScreenY = -fineYOffset
+                baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
                 if state.is2006 then
-                    -- A completed $2006 write provides the current source row,
-                    -- while this renderer stores a top-of-screen Y origin.
                     local holder = tileY - state.offsetY
                     coarseScrollY = -holder
                 end
             end
-
-            -- Coarse Y is not modulo 30. Rows 30/31 deliberately read the
-            -- attribute bytes as tile IDs, and 31 wraps without changing NT Y.
             local tileYIndex, effectiveNametableY = loopy.AdvanceVertical(
-                coarseScrollY,
-                nametableY,
-                screenY
-            )
-
-            -- Loop over horizontal tile columns (from -1 to 31)
-            for tileX = -1, 31 do
-                -- Compute where this tile’s top‑left corner will be drawn on screen.
+                coarseScrollY, nametableY, screenY)
+            for tileX = -1, 32 do
                 local screenTileX = baseScreenX + tileX * 8
                 local screenTileY = baseScreenY + tileY * 8
-
-                -- Compute which tile from the background nametable we need:
-                -- (Here we combine the current tile index with the coarse scroll.)
-                local scrollTileX = tileX + coarseScrollX
+                local tileXIndex = tileX + coarseScrollX
                 local effectiveNametableX = nametableX
-                local tileXIndex = scrollTileX
-                -- This loop draws at most one tile beyond either side, so the
-                -- horizontal origin can cross only one nametable boundary.
                 if tileXIndex < 0 then
                     tileXIndex = tileXIndex + 32
                     effectiveNametableX = 1 - effectiveNametableX
@@ -223,20 +189,15 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                     tileXIndex = tileXIndex - 32
                     effectiveNametableX = 1 - effectiveNametableX
                 end
-
                 local localNamespace = 0x2000
-                    + effectiveNametableX * 0x400
-                    + effectiveNametableY * 0x800
-                local tileID, attributeValue = calculateTileAndAttributeAddresses(tileXIndex, tileYIndex, localNamespace)
-
-                -- Look up the proper tile row data for this scanline (fineY)
+                    + effectiveNametableX * 0x400 + effectiveNametableY * 0x800
+                local tileID, attributeValue = calculateTileAndAttributeAddresses(
+                    tileXIndex, tileYIndex, localNamespace)
                 local tileAddr = backgroundTable * 0x1000 + tileID * 16 + fineY
-                local tile_lsb = tileSet[tileAddr]
-                local tile_msb = tileSet[tileAddr + 8]
+                local tile_lsb, tile_msb = tileSet[tileAddr], tileSet[tileAddr + 8]
                 if tile_lsb == nil then return end
-
-                -- Draw the current row (scanline) of the tile at its proper screen position.
-                drawTileRow(screenTileX, screenTileY, fineY, tile_lsb, tile_msb, attributeValue, ptrScreenBuffer)
+                drawTileRow(screenTileX, screenTileY, fineY, tile_lsb, tile_msb,
+                    attributeValue, ptrScreenBuffer)
             end
             scanLine = scanLine + 1
         end
@@ -386,47 +347,109 @@ local imageY = 240
 -- Screen Buffer -- buffer to store the image data This STARTS Alpha 0
 local screenBuffer = love.image.newImageData(imageX, imageY, "rgba8")
 local screenImage = love.graphics.newImage(screenBuffer)
+local nametableCanvasA = nil
+local nametableCanvasB = nil
+local nametableQuads = {}
+local nametablePatternImages = {}
+local nametablePatternBuffers = {}
+
+local function getNametableQuad(tileId)
+    local quad = nametableQuads[tileId]
+    if quad then return quad end
+    local offsetX = bit.lshift(bit.band(tileId, 0x0F), 3)
+    local offsetY = bit.lshift(bit.band(bit.rshift(tileId, 4), 0x0F), 3)
+    quad = love.graphics.newQuad(offsetX, offsetY, 8, 8, 128, 128)
+    nametableQuads[tileId] = quad
+    return quad
+end
+
+local function selectAttributeValue(attributeByte, tileX, tileY)
+    local quadrantX = math.floor((tileX % 4) / 2)
+    local quadrantY = math.floor((tileY % 4) / 2)
+    return bit.band(bit.rshift(attributeByte or 0, quadrantY * 4 + quadrantX * 2), 0x03)
+end
+
+-- CHR ROM contains pattern bits only. Build separate sheets using the real
+-- palette so nametable previews do not follow the CHR inspection palette.
+local function updateNametablePatternImage(pattern, patternBase, paletteIndex)
+    local buffer = nametablePatternBuffers[paletteIndex]
+    local image = nametablePatternImages[paletteIndex]
+    if not buffer then
+        buffer = love.image.newImageData(128, 128, "rgba8")
+        image = love.graphics.newImage(buffer)
+        nametablePatternBuffers[paletteIndex] = buffer
+        nametablePatternImages[paletteIndex] = image
+    end
+
+    local pointer = ffi.cast("uint8_t*", buffer:getFFIPointer())
+    local base = paletteIndex * 4
+    for tileY = 0, 15 do
+        for tileX = 0, 15 do
+            local tileAddress = patternBase + tileY * 256 + tileX * 16
+            for fineY = 0, 7 do
+                local lsb = pattern[tileAddress + fineY] or 0
+                local msb = pattern[tileAddress + fineY + 8] or 0
+                for fineX = 0, 7 do
+                    local bitIndex = 7 - fineX
+                    local pixel = bit.band(bit.rshift(lsb, bitIndex), 1)
+                        + bit.lshift(bit.band(bit.rshift(msb, bitIndex), 1), 1)
+                    local paletteAddress = pixel == 0 and 0 or (base + pixel)
+                    local colorIndex = nameTable.tblPalette[paletteAddress] or 0
+                    local rgb = colors[bit.band(colorIndex, 0x3F)] or colors[0]
+                    local p = ((tileY * 8 + fineY) * 128 + tileX * 8 + fineX) * 4
+                    pointer[p], pointer[p + 1], pointer[p + 2], pointer[p + 3] = rgb[1], rgb[2], rgb[3], 255
+                end
+            end
+        end
+    end
+    image:replacePixels(buffer)
+    return image
+end
 
 --^ HACK CHECK
 function PPUtoLove2d.ScreenToNumbers(CHR1, CHR2)
     if loopy.ppuStates[1] == nil then return end
+    local state = loopy.ppuStates[1]
+    local pattern = state.spriteTileSet
+    local patternBase = state.backgroundTable * 0x1000
+    local patternImages = {}
+    for palette = 0, 3 do
+        patternImages[palette] = updateNametablePatternImage(pattern, patternBase, palette)
+    end
     
-    local backgroundTable = (loopy.ppuStates[1].backgroundTable == 0) and CHR1 or CHR2
-    local quadWidth, quadHeight = 8, 8
-    
-    -- Create canvases
-    local canvasA = love.graphics.newCanvas(256, 240)
-    local canvasB = love.graphics.newCanvas(256, 240)
+    -- Create canvases once and reuse them. Tile quads are cached by tile ID.
+    if not nametableCanvasA then
+        nametableCanvasA = love.graphics.newCanvas(256, 240)
+        nametableCanvasB = love.graphics.newCanvas(256, 240)
+    end
     
     -- Draw to first canvas
-    love.graphics.setCanvas(canvasA)
+    love.graphics.setCanvas(nametableCanvasA)
     love.graphics.clear()
     for y=0, 29 do
         for x=0, 31 do
             local id0 = nameTable.tblName[0][y*32+x]
-            local offsetX0 = bit.lshift(bit.band(id0, 0x0F), 3)
-            local offsetY0 = bit.lshift(bit.band(bit.rshift(id0, 4), 0x0F), 3)
-            
+            local attributeAddress = 0x03C0 + math.floor(y / 4) * 8 + math.floor(x / 4)
+            local palette = selectAttributeValue(nameTable.tblName[0][attributeAddress], x, y)
             love.graphics.draw(
-                backgroundTable,
-                love.graphics.newQuad(offsetX0, offsetY0, quadWidth+1, quadHeight+1, 128, 128),
+                patternImages[palette],
+                getNametableQuad(id0),
                 x * 8, y * 8, nil, 1
             )
         end
     end
     
     -- Draw to second canvas
-    love.graphics.setCanvas(canvasB)
+    love.graphics.setCanvas(nametableCanvasB)
     love.graphics.clear()
     for y=0, 29 do
         for x=0, 31 do
             local id1 = nameTable.tblName[1][y*32+x]
-            local offsetX1 = bit.lshift(bit.band(id1, 0x0F), 3)
-            local offsetY1 = bit.lshift(bit.band(bit.rshift(id1, 4), 0x0F), 3)
-            
+            local attributeAddress = 0x03C0 + math.floor(y / 4) * 8 + math.floor(x / 4)
+            local palette = selectAttributeValue(nameTable.tblName[1][attributeAddress], x, y)
             love.graphics.draw(
-                backgroundTable,
-                love.graphics.newQuad(offsetX1, offsetY1, quadWidth+1, quadHeight+1, 128, 128),
+                patternImages[palette],
+                getNametableQuad(id1),
                 x * 8, y * 8, nil, 1
             )
         end
@@ -435,7 +458,7 @@ function PPUtoLove2d.ScreenToNumbers(CHR1, CHR2)
     -- Reset canvas
     love.graphics.setCanvas()
     
-    return canvasA, canvasB
+    return nametableCanvasA, nametableCanvasB
 end
 
 --# Draw Screen Buffer to Love2d Screen
@@ -452,7 +475,8 @@ function PPUtoLove2d.GameWindow()
     local screenY = 15
     if EnableDebug then
         screenScale = 2
-        screenX = 15
+        screenX = 10
+        screenY = 65
     else
         screenScale = math.floor(love.graphics.getHeight() / 240)  --* Integer scale to fit window height
         if screenScale < 1 then screenScale = 1 end
@@ -463,7 +487,7 @@ function PPUtoLove2d.GameWindow()
     end
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(screenImage, screenX, screenY, 0, screenScale)
-    if EnableDebug then
+    if EnableDebug and DebugActiveTab == "ppu" then
         --print()
         for i = 1, #loopy.ppuStates do
             --print("STATE NOW ".. #loopy.ppuStates .. " " .. loopy.ppuStates[i].scanLine.."NameX " .. loopy.ppuStates[i].namespace_x .."OffsetX ".. loopy.ppuStates[i].offset_x .."FineX ".. loopy.ppuStates[i].fineOffset_x .. " NameY " .. loopy.ppuStates[i].namespace_y .."OffsetY ".. loopy.ppuStates[i].offset_y .." ".. loopy.ppuStates[i].fineOffset_y .. " mirror ".. 

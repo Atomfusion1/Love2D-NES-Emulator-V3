@@ -157,6 +157,22 @@ function ppuBus.CPURead(addr)
     return 0x00
 end
 
+-- Side-effect-free debugger read for the CPU-visible PPU registers.
+-- Normal CPURead must retain hardware behavior (for example $2002 clears
+-- status and $2007 advances VRAM), so the memory viewer must not use it.
+function ppuBus.CPUPeek(addr)
+    if addr == 0x0000 then return ppuIO.CTRL
+    elseif addr == 0x0001 then return ppuIO.MASKS
+    elseif addr == 0x0002 then return ppuIO.STATUS
+    elseif addr == 0x0003 then return ppuIO.OAMADDR
+    elseif addr == 0x0004 then return OAM[ppuIO.OAMADDR] or 0
+    elseif addr == 0x0005 then return ppuIO.SCROLL
+    elseif addr == 0x0006 then return ppuIO.ADDR
+    elseif addr == 0x0007 then return ppuIO.DATA
+    end
+    return 0
+end
+
 function ppuBus.CPUWrite(addr, data)
     if CPURegisters.writeHandlers[addr] then
         CPURegisters.writeHandlers[addr](addr, data)
@@ -181,7 +197,14 @@ function ppuBus.PPURead(addr)
     elseif addr <= 0x3EFF then
         return nameTableRead(addr)
     else -- Palette range (0x3F00-0x3FFF)
-        return tblPalette[ addr - 0x3F00 ]
+        local paletteAddress = band(addr - 0x3F00, 0x1F)
+        -- The four sprite-palette color-zero entries mirror the universal
+        -- background entries in palette RAM.
+        if paletteAddress == 0x10 then paletteAddress = 0x00 end
+        if paletteAddress == 0x14 then paletteAddress = 0x04 end
+        if paletteAddress == 0x18 then paletteAddress = 0x08 end
+        if paletteAddress == 0x1C then paletteAddress = 0x0C end
+        return tblPalette[paletteAddress]
     end
 end
 

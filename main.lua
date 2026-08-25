@@ -19,9 +19,11 @@ local controller    = require("NES.Controller.controller")
 LoveFileDir             = love.filesystem.getSourceBaseDirectory() .. "/" .. love.filesystem.getIdentity() .. "/"
 GlobalFileName          = love.filesystem.read("Emulator/nesEmuState.txt")
 G_CPUStep               = 2         --# 1 = 1 cycle, 2 = 1 frame
+G_FrameStepRequested    = false     --# execute one complete emulated frame, then pause
 UseSound                = true      --# enable disable sound
 EnableDebug             = false     --# enable Debug 
 Profile                 = false     --# enable Profiling
+PerformanceDetailEnabled = false    --# enable detailed CPU/PPU timing only on request
 EmulationReady          = false     --# true after a supported cartridge loads
 
 -- NTSC NES timing is independent of the monitor refresh rate.  Keep emulation
@@ -31,11 +33,18 @@ local NTSC_FRAME_TIME    = 1 / NTSC_FRAME_RATE
 local NTSC_CPU_CYCLES    = 29781
 local emulationTime      = 0
 local MAX_CATCHUP_FRAMES = 4
+local lastDebugPPURefresh = 0
 
 local function RunEmulatedFrame()
     if Profile then profile.start() end
+    local apuStart = love.timer.getTime()
     apu.TimerCheck(NTSC_FRAME_TIME)
+    loveSpeed.RecordComponent("apu", love.timer.getTime() - apuStart)
+    local cpuStart = love.timer.getTime()
     cpu.ExecuteCycles(NTSC_CPU_CYCLES)
+    local cpuElapsed = love.timer.getTime() - cpuStart
+    loveSpeed.RecordComponent("cpuCore", cpuElapsed)
+    loveSpeed.RecordComponent("cpu", cpuElapsed)
 end
 
 --& Run Once on Load
@@ -60,6 +69,13 @@ function love.update(dt)
     end
     if G_SkipFrameAfterStateLoad then
         G_SkipFrameAfterStateLoad = false
+        emulationTime = 0
+        return
+    end
+    if G_FrameStepRequested then
+        G_FrameStepRequested = false
+        RunEmulatedFrame()
+        G_CPUStep = 0
         emulationTime = 0
         return
     end
@@ -92,6 +108,8 @@ function love.draw()
     if EmulationReady then
         pputolove.GameWindow()
     end
+    -- Draw modal help last so the game image cannot cover it.
+    testing.DrawHelpOverlay()
     selectFile.DrawPopup()
     loveSpeed.DisplayScreen()   --* Display us Timer 
     cpu.drawFrame = false
@@ -112,8 +130,36 @@ end
 function DebugDraw()
     if EnableDebug then
         testing.DisplayUI()
-        ppu.DrawCharacterTiles()
+        local now = love.timer.getTime()
+        if testing.GetActiveTab() == "ppu" then
+            if now - lastDebugPPURefresh >= 0.1 then
+                ppu.UpdateCharacterTiles()
+                lastDebugPPURefresh = now
+            end
+            -- Draw the last completed diagnostic images every frame so the
+            -- panel persists between limited-rate refreshes.
+            ppu.DrawCharacterTiles()
+        end
     end
+end
+
+-- The file picker installs callbacks while loading. Keep popup input handling,
+-- then route debugger input through the shell as well.
+function love.mousepressed(x, y, button, istouch)
+    selectFile.MousePressed(x, y, button)
+    if not selectFile.isPopupVisible then
+        testing.MousePressed(x, y, button)
+    end
+end
+
+function love.keypressed(key, scancode, isrepeat)
+    selectFile.KeyboardInput(key)
+    if selectFile.isPopupVisible then return end
+    if key == "f1" then
+        testing.ToggleHelp()
+        return
+    end
+    keyboard.HandleKeyPressed(key)
 end
 
 --# Initialize Cartridge

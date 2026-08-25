@@ -6,6 +6,7 @@ local OAM           = require("NES.PPU.ppuOAM")
 local loopy         = require("NES.PPU.loopy")
 local ppuBus        = require("NES.PPU.ppuBus")
 local profile       = require("Includes.profile.profile")
+local displayTimer  = require("Includes.displaytimer")
 local mapper        = require("NES.Cartridge.Mappers")
 
 --! Entire PPU is a Hack Job and Needs to be reworked from the ground up but I am lazy and it works so i am not going to touch it
@@ -322,23 +323,35 @@ function ppu.FFIBuffer(ArrayToRender, screenImage, buffer)
 end
 
 function ppu.StartGameWindow()
+    local ppuRenderStart = love.timer.getTime()
 --# Draw Background with 3F00 Color 
     local ptrScreenBuffer = require("ffi").cast("uint32_t*", ppu.screenBuffer:getFFIPointer())
+    local setupStart = love.timer.getTime()
     PPUtoLove.SetupScreenArray(ptrScreenBuffer)
+    displayTimer.RecordComponent("ppuSetup", love.timer.getTime() - setupStart)
 --# Draw Sprites behind background
+    local spriteStart = love.timer.getTime()
     PPUtoLove.DrawBehindSpritesOnly(ptrScreenBuffer)
+    displayTimer.RecordComponent("ppuSprites", love.timer.getTime() - spriteStart)
 --# Draw Background 
+    local backgroundStart = love.timer.getTime()
     if loopy.drawScreen then PPUtoLove.DrawMainScreen(ptrScreenBuffer) end
+    displayTimer.RecordComponent("ppuBackground", love.timer.getTime() - backgroundStart)
 --# Draw Forground Sprites
+    local foregroundStart = love.timer.getTime()
     PPUtoLove.DrawInFrontSpritesOnly(ptrScreenBuffer)
+    displayTimer.RecordComponent("ppuSprites", love.timer.getTime() - foregroundStart)
 --# Load Background to buffer
+    local uploadStart = love.timer.getTime()
     PPUtoLove.FrameToScreen(ppu.screenBuffer)
+    displayTimer.RecordComponent("ppuUpload", love.timer.getTime() - uploadStart)
 --# ppuOAM.Clear()
     if Profile then
         profile.stop()
         print(profile.report(20))
         profile.reset()
     end
+    displayTimer.RecordComponent("ppu", love.timer.getTime() - ppuRenderStart)
 end
 
 function ppu.StartScreenToNumbers()
@@ -347,6 +360,23 @@ end
 
 local CHR0 = {}
 local CHR1 = {}
+local debugNametable1 = nil
+local debugNametable2 = nil
+local chrDebugX = 600
+local chrDebugY0 = 185
+local chrDebugY1 = 445
+local chrDebugScale = 2
+local debugNametableMode = 0 -- 0=native, 1=all nametable A, 2=all nametable B
+
+function ppu.CycleDebugNametableMode()
+    debugNametableMode = (debugNametableMode + 1) % 3
+end
+
+function ppu.GetDebugNametableModeLabel()
+    if debugNametableMode == 1 then return "All A" end
+    if debugNametableMode == 2 then return "All B" end
+    return "Native"
+end
 
 function ppu.DrawMirroredNametables(nametable1, nametable2, mirrorMode)
     -- Base positions (x, y) for 2x2 grid
@@ -357,7 +387,10 @@ function ppu.DrawMirroredNametables(nametable1, nametable2, mirrorMode)
         [2] = "SINGLE LOW (2): A A A A",
         [3] = "SINGLE HIGH (3): B B B B"
     }
-    love.graphics.print(mirrorNames[cart.Mirror] or "Unknown Mirror Mode", 10, 470)
+    local mirrorLabel = mirrorNames[cart.Mirror] or "Unknown Mirror Mode"
+    if debugNametableMode == 1 then mirrorLabel = mirrorLabel .. "  |  DEBUG: ALL A" end
+    if debugNametableMode == 2 then mirrorLabel = mirrorLabel .. "  |  DEBUG: ALL B" end
+    love.graphics.print(mirrorLabel, 1000, 80)
 
     local x = 1000
     local y = 100
@@ -378,8 +411,12 @@ function ppu.DrawMirroredNametables(nametable1, nametable2, mirrorMode)
     
     -- Get correct mapping based on mirror mode
     local layout = mirrorMap[mirrorMode]
+    if debugNametableMode == 1 then
+        layout = {nametable1, nametable1, nametable1, nametable1}
+    elseif debugNametableMode == 2 then
+        layout = {nametable2, nametable2, nametable2, nametable2}
+    end
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(mirrorNames[cart.Mirror] or "Unknown Mirror Mode", x+20, y-20, 0, 1, 1)
     -- Draw all four positions
     for i = 1, 4 do
         love.graphics.setColor(1, 1, 1, 1)
@@ -398,30 +435,50 @@ function ppu.StartCharacterTiles()
     ppu.FFIBuffer(CHR1, ppu.patternScreen1, ppu.patternbuffer1)
 end
 
-function ppu.DrawCharacterTiles()
+-- Rebuild the expensive debug images. Call this at a limited rate while the
+-- debugger is running; DrawCharacterTiles below can still run every frame.
+function ppu.UpdateCharacterTiles()
     ppu.StartCharacterTiles()
+    debugNametable1, debugNametable2 = PPUtoLove.ScreenToNumbers(ppu.patternScreen0, ppu.patternScreen1)
+end
+
+function ppu.SelectDebugState(delta)
+    local totalStates = #loopy.ppuStates
+    if totalStates == 0 then return end
+    selectedState = (selectedState - 1 + delta) % totalStates + 1
+end
+
+function ppu.DrawCharacterTiles()
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(ppu.patternScreen0, 10, 500, 0, 2)
+    love.graphics.draw(ppu.patternScreen0, chrDebugX, chrDebugY0, 0, chrDebugScale)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(ppu.patternScreen1, 275, 500, 0, 2)
+    love.graphics.draw(ppu.patternScreen1, chrDebugX, chrDebugY1, 0, chrDebugScale)
     -- Draw PPU state selector under nametable debug screens (right side)
     local stateX = 1010
-    local stateY = 590
+    local stateY = 640
     local totalStates = #loopy.ppuStates
     local itemsPerRow = 4
     local itemWidth = 110
     local itemHeight = 22
     local spacing = 5
     
-    love.graphics.setColor(0.7, 0.7, 0.7, 1)
-    love.graphics.print("[C] prev  [V] next", stateX, stateY)
+    local function stateButton(label, x)
+        love.graphics.setColor(0.08, 0.16, 0.22, 1)
+        love.graphics.rectangle("fill", x, stateY, 80, 24, 3, 3)
+        love.graphics.setColor(0.45, 0.75, 0.9, 1)
+        love.graphics.rectangle("line", x, stateY, 80, 24, 3, 3)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.printf(label, x, stateY + 4, 80, "center")
+    end
+    stateButton("C  Prev", stateX)
+    stateButton("V  Next", stateX + 88)
     
     for i = 1, totalStates do
         local state = loopy.ppuStates[i]
         local col = (i - 1) % itemsPerRow
         local row = math.floor((i - 1) / itemsPerRow)
         local xPos = stateX + col * (itemWidth + spacing)
-        local yPos = stateY + 18 + row * (itemHeight + spacing)
+        local yPos = stateY + 30 + row * (itemHeight + spacing)
         
         if i == selectedState then
             love.graphics.setColor(0, 1, 0.4, 1)
@@ -434,8 +491,9 @@ function ppu.DrawCharacterTiles()
     end
     love.graphics.setColor(1, 1, 1, 1)
     --ppu.StartCharacterTiles()
-    local nametable1, nametable2 = PPUtoLove.ScreenToNumbers(ppu.patternScreen0, ppu.patternScreen1)
-    ppu.DrawMirroredNametables(nametable1, nametable2, cart.Mirror)
+    if debugNametable1 and debugNametable2 then
+        ppu.DrawMirroredNametables(debugNametable1, debugNametable2, cart.Mirror)
+    end
 end
 
 return ppu

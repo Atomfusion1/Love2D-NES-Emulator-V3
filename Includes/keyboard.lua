@@ -3,7 +3,9 @@ local controller = require("NES.Controller.controller")
 local selectFile = require("Emulator.UI.Emulator.selectfile")
 
 local keyboard = {}
-G_ColorOffset = 1
+-- Start the CHR debugger on background palette 0 ($3F00-$3F03).
+-- Palette 1 can legitimately be dark/purple depending on the ROM contents.
+G_ColorOffset = 0
 local function getAddressFromUser()
     -- set up the dialog box properties
     local dialogWidth = 400
@@ -82,15 +84,15 @@ local keypressed = {
     ["."] = function() G_CPUStep = 2 end,
     [","] = function() G_CPUStep = 0 end,
     ["y"] = function()
-        G_ColorOffset = G_ColorOffset + 1 -- Palette Color Changing 
+        G_ColorOffset = require("Emulator.UI.Debug.testing").CycleCharacterPalette()
         print("Pallette Color Change ", G_ColorOffset)
-        if G_ColorOffset > 7 then G_ColorOffset = 0 end
     end,
     ["t"] = function()
         G_ViewMemory = G_ViewMemory + 1 -- Testing PPU vs CPU memory 
         if G_ViewMemory > 3 then
             G_ViewMemory=0
         end
+        require("Emulator.UI.Debug.testing").SetActiveTab("memory")
         print("Cycle Debug Hex ")
     end,
     ["/"] = function() G_CPUStep = 1 end,
@@ -124,6 +126,7 @@ local keypressed = {
     end,
     ["v"] = function() 
         local loopy = require("NES.PPU.loopy")
+        require("Emulator.UI.Debug.testing").SetActiveTab("ppu")
         local maxStates = #loopy.ppuStates
         if maxStates > 0 then
             selectedState = selectedState % maxStates + 1
@@ -131,6 +134,7 @@ local keypressed = {
     end,
     ["c"] = function() 
         local loopy = require("NES.PPU.loopy")
+        require("Emulator.UI.Debug.testing").SetActiveTab("ppu")
         local maxStates = #loopy.ppuStates
         if maxStates > 0 then
             selectedState = (selectedState - 2) % maxStates + 1
@@ -172,12 +176,22 @@ local keypressed = {
 
 -- # Key is Pressed Check 
 ---@diagnostic disable-next-line: duplicate-set-field
-function love.keypressed(key)
+function keyboard.HandleKeyPressed(key)
     selectFile.KeyboardInput(key)
-    if selectFile.isPopupVisable then return end
+    if selectFile.isPopupVisible then return end
     if keypressed[key] then
         keypressed[key]()
     end
+end
+
+-- Public action used by the debugger toolbar/CPU tab.
+function keyboard.OpenBreakpoint()
+    keypressed["b"]()
+end
+
+-- Kept for callers that use this module without the main application wrapper.
+function love.keypressed(key)
+    keyboard.HandleKeyPressed(key)
 end
 
 local increment = 0

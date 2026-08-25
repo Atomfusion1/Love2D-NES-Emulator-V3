@@ -7,6 +7,7 @@ local bus           = require("NES.BUS.bus")
 local addressMode   = require("NES.CPU.opcodes.addressmodes")
 local apu           = require("NES.Audio.apu")
 local loopy         = require("NES.PPU.loopy")
+local displayTimer  = require("Includes.displaytimer")
 
 -- # 6502 CPU
 local cpu         = {}
@@ -198,9 +199,13 @@ function cpu.ExecuteCycles(totalCycles)
 
             -- Batch PPU updates with threshold of 16 cycles
             if ppuCycleDebt >= 1 then
+                local ppuEmuStart = PerformanceDetailEnabled and love.timer.getTime() or 0
                 if not PPUUpdate(ppuCycleDebt) then
                     cpu.drawFrame = true
                     totalCycles = 0
+                end
+                if PerformanceDetailEnabled then
+                    displayTimer.RecordComponent("ppuEmu", love.timer.getTime() - ppuEmuStart)
                 end
                 ppuCycleDebt = 0
             end

@@ -26,7 +26,9 @@ for i = 0, 0x0400 do
 end
 -- Palette Table 
 for i = 0, 0x20 do
-    nameTable.tblPalette[i] = love.math.random(0,40)
+    -- Power-on palette RAM is deterministic in the debugger.  The cartridge
+    -- will overwrite these entries through PPU writes during initialization.
+    nameTable.tblPalette[i] = 0x00
 end
 
 -- Initialize Pattern Tables 

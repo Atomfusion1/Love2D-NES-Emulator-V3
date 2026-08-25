@@ -8,8 +8,7 @@ local functionRead = nil
 local ROM = nil
 
 function mapper.CPURead(addr)
-    if functionRead(addr) == nil then print("Boom", string.format("%x",addr)) return 0 end
-    return functionRead(addr)
+    return functionRead and (functionRead(addr) or 0) or 0
 end
 
 function mapper.CPUWrite(addr, value)
@@ -34,21 +33,16 @@ function mapper.INI()
     print("mapper initialized Mirror State "..cart.Mirror)
     CHRoffset = cart.header[0x04]*0x4000 + 0x0010 -- offset for header added back on 
     ROM = cart.ROM
-    if cart.header[0x04] == 1 then
-        functionRead = function(addr)
-            if addr >= 0xC000 and addr <= 0xFFFF then
-                return cart.ROM[addr - 0xC000 + 0x0010] -- offset for header added back on 
-            elseif addr >= 0x8000 and addr <= 0xFFFF then
-                return cart.ROM[addr - 0x8000 + 0x0010] -- offset for header added back on 
-            elseif addr >= 0x4020 and addr <= 0x7FFF then
-                print(string.format("Write to Rom %x",(addr - 0x4000 + 0x0010)))
-                return 0 -- Ice Climber hack atm 
-            end
+    local prgBanks = cart.header[0x04] or 1
+    functionRead = function(addr)
+        -- $4020-$5FFF is cartridge expansion space and $6000-$7FFF is
+        -- optional PRG-RAM. Mapper 0 cartridges without PRG-RAM read as zero.
+        if addr < 0x8000 or addr > 0xFFFF then return 0 end
+        local offset = addr - 0x8000
+        if prgBanks == 1 then
+            offset = bit.band(offset, 0x3FFF) -- mirror the 16 KiB PRG bank
         end
-    else
-        functionRead = function(addr)
-            return ROM[addr - 0x7FF0]
-        end
+        return ROM[offset + 0x0010] or 0
     end
 end
 

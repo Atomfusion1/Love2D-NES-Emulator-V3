@@ -15,6 +15,14 @@ local alpha = 0.01  -- This is the smoothing factor, usually a small value
 local maxFUT = 0.0
 local maxFUT1 = 0.0
 local maxFUTTime = 0
+local metricsFont = nil
+local frameSamples = {}
+local componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {} }
+local pendingComponents = {}
+local lastComponentValues = { cpu = 0, ppu = 0 }
+local frameSampleIndex = 0
+local frameSampleCount = 0
+local FRAME_SAMPLE_LIMIT = 600
 
 --# Start the timer
 function displayTimer.StartTimer()
@@ -45,10 +53,82 @@ function displayTimer.DisplayScreen()
     cycleTime = love.timer.getTime() - timerForFPS  -- This timer is the amount of time it takes to update and draw the next screen
     UpdateRunningAverage(cycleTime)
     UpdateFUT(cycleTime)
+    frameSampleIndex = frameSampleIndex % FRAME_SAMPLE_LIMIT + 1
+    frameSamples[frameSampleIndex] = math.max(0, cycleTime)
+    for name, samples in pairs(componentSamples) do
+        if pendingComponents[name] then
+            lastComponentValues[name] = math.max(0, pendingComponents[name])
+        end
+        -- A render component may not run on every presentation callback. Keep
+        -- its last measured value instead of drawing a false zero-time dip.
+        samples[frameSampleIndex] = lastComponentValues[name] or 0
+    end
+    pendingComponents = {}
+    frameSampleCount = math.min(frameSampleCount + 1, FRAME_SAMPLE_LIMIT)
     UpdateScreenValues()
     DrawPerformanceMetrics()
     DelayScreen()
     timerForFPS = love.timer.getTime()              -- This timer is the amount of time it takes to update and draw the next screen before delay for next frame
+end
+
+function displayTimer.ResetStats()
+    cycleTime = 0
+    currentAverage = 0
+    maxFUT = 0
+    maxFUT1 = 0
+    maxFUTTime = 0
+    frameSampleIndex = 0
+    frameSampleCount = 0
+    frameSamples = {}
+    componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {} }
+    pendingComponents = {}
+    lastComponentValues = { cpu = 0, ppu = 0 }
+end
+
+function displayTimer.RecordComponent(name, elapsed)
+    if not componentSamples[name] then componentSamples[name] = {} end
+    pendingComponents[name] = (pendingComponents[name] or 0) + elapsed
+end
+
+function displayTimer.GetStats()
+    local samples = {}
+    local total = 0
+    for i = 1, frameSampleCount do
+        local index = (frameSampleIndex - frameSampleCount + i - 1) % FRAME_SAMPLE_LIMIT + 1
+        local value = frameSamples[index] or 0
+        samples[i] = value
+        total = total + value
+    end
+    local sorted = {}
+    for i, value in ipairs(samples) do sorted[i] = value end
+    table.sort(sorted, function(a, b) return a > b end)
+    local lowIndex = math.max(1, math.ceil(#sorted * 0.01))
+    local onePercentLow = sorted[lowIndex] or 0
+    local components = {}
+    for name, source in pairs(componentSamples) do
+        components[name] = {}
+        for i = 1, frameSampleCount do
+            local index = (frameSampleIndex - frameSampleCount + i - 1) % FRAME_SAMPLE_LIMIT + 1
+            components[name][i] = source[index] or 0
+        end
+    end
+    -- Component timings can be captured on a slightly different emulation
+    -- callback boundary than the presentation timer. Keep the displayed
+    -- overall series as an upper bound so it cannot visually fall below a
+    -- measured CPU or PPU contribution.
+    for i = 1, frameSampleCount do
+        samples[i] = math.max(samples[i] or 0, components.cpu[i] or 0, components.ppu[i] or 0)
+    end
+    return {
+        current = math.max(0, cycleTime),
+        average = frameSampleCount > 0 and total / frameSampleCount or 0,
+        peak = maxFUT,
+        onePercentLow = onePercentLow,
+        fps = love.timer.getFPS(),
+        memoryMB = collectgarbage("count") / 1024,
+        samples = samples,
+        components = components
+    }
 end
 
 --# Update the screen values
@@ -78,8 +158,13 @@ end
 --# Draw the performance metrics
 function DrawPerformanceMetrics()
     local baseX = 20                -- setup x location on screen
-    local baseY = 5                 -- setup height on screen
-    love.graphics.setFont(love.graphics.newFont(12))
+    -- Keep the metrics visible in debug mode, but place them above the
+    -- debugger status bar instead of over the toolbar.
+    local baseY = EnableDebug and (love.graphics.getHeight() - 44) or 5
+    if not metricsFont then
+        metricsFont = love.graphics.newFont(12)
+    end
+    love.graphics.setFont(metricsFont)
     local colorValue = {1, 0.3, 0.3, 1} -- Color for metric values
     
     -- Frame Time metric
