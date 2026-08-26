@@ -95,12 +95,12 @@ AddOpcode(0xA1, "LDA", addressMode.GetIndexed_Indirect_XMode, functionH_N.LDAFun
 AddOpcode(0xB1, "LDA", addressMode.GetIndirect_Indexed_YMode, functionH_N.LDAFunction, 2, 5)
 --STA
 AddOpcode(0x8D, "STA", addressMode.GetAbsoluteAddressMode, functionO_T.STAFunction, 3, 4)
-AddOpcode(0x9D, "STA", addressMode.GetAbsolute_XAddressMode, functionO_T.STAFunction, 3, 5)
-AddOpcode(0x99, "STA", addressMode.GetAbsolute_YAddressMode, functionO_T.STAFunction, 3, 5)
+AddOpcode(0x9D, "STA", addressMode.GetAbsolute_XStoreAddressMode, functionO_T.STAFunction, 3, 5)
+AddOpcode(0x99, "STA", addressMode.GetAbsolute_YStoreAddressMode, functionO_T.STAFunction, 3, 5)
 AddOpcode(0x85, "STA", addressMode.GetZeroPageAddressMode, functionO_T.STAFunction, 2, 3)
 AddOpcode(0x95, "STA", addressMode.GetZeroPage_XAddressMode, functionO_T.STAFunction, 2, 4)
 AddOpcode(0x81, "STA", addressMode.GetIndexed_Indirect_XMode, functionO_T.STAFunction, 2, 6)
-AddOpcode(0x91, "STA", addressMode.GetIndirect_Indexed_YMode, functionO_T.STAFunction, 2, 6)
+AddOpcode(0x91, "STA", addressMode.GetIndirect_Indexed_YStoreMode, functionO_T.STAFunction, 2, 6)
 --STX
 AddOpcode(0x8E, "STX", addressMode.GetAbsoluteAddressMode, functionO_T.STXFunction, 3, 4)
 AddOpcode(0x86, "STX", addressMode.GetZeroPageAddressMode, functionO_T.STXFunction, 2, 3)
@@ -248,6 +248,25 @@ AddOpcode(0x5C, "NOP", addressMode.GetAbsolute_XAddressMode, illegalOpcode.NOPFu
 AddOpcode(0x7C, "NOP", addressMode.GetAbsolute_XAddressMode, illegalOpcode.NOPFunction, 3, 4)
 AddOpcode(0xDC, "NOP", addressMode.GetAbsolute_XAddressMode, illegalOpcode.NOPFunction, 3, 4)
 AddOpcode(0xFC, "NOP", addressMode.GetAbsolute_XAddressMode, illegalOpcode.NOPFunction, 3, 4)
+
+-- Unofficial load (safe, non-timing-sensitive subset).
+-- SH* are deliberately length-correct no-ops for now; this makes their
+-- AccuracyCoin entries report FAIL instead of corrupting test RAM or looping.
+AddOpcode(0x93, "SHA", addressMode.GetSHA_IndirectYAddressMode, illegalOpcode.SHA93Function, 2, 6)
+AddOpcode(0x9F, "SHA", addressMode.GetSHA_AbsoluteYAddressMode, illegalOpcode.SHA9FFunction, 3, 5)
+AddOpcode(0x9B, "SHS", addressMode.GetSHA_AbsoluteYAddressMode, illegalOpcode.SHS9BFunction, 3, 5)
+AddOpcode(0x9C, "SHY", addressMode.GetSHY_AbsoluteXAddressMode, illegalOpcode.SHY9CFunction, 3, 5)
+AddOpcode(0x9E, "SHX", addressMode.GetSHX_AbsoluteYAddressMode, illegalOpcode.SHX9EFunction, 3, 5)
+AddOpcode(0xBB, "LAS", addressMode.GetAbsolute_YAddressMode, illegalOpcode.LASBBFunction, 3, 4)
+
+-- Unofficial immediate instructions.
+AddOpcode(0x0B, "ANC", addressMode.GetImmediateMode, illegalOpcode.ANCFunction, 2, 2)
+AddOpcode(0x2B, "ANC", addressMode.GetImmediateMode, illegalOpcode.ANCFunction, 2, 2)
+AddOpcode(0x4B, "ASR", addressMode.GetImmediateMode, illegalOpcode.ASRFunction, 2, 2)
+AddOpcode(0x6B, "ARR", addressMode.GetImmediateMode, illegalOpcode.ARRFunction, 2, 2)
+AddOpcode(0x8B, "ANE", addressMode.GetImmediateMode, illegalOpcode.ANEFunction, 2, 2)
+AddOpcode(0xAB, "LXA", addressMode.GetImmediateMode, illegalOpcode.LXAFunction, 2, 2)
+AddOpcode(0xCB, "AXS", addressMode.GetImmediateMode, illegalOpcode.AXSFunction, 2, 2)
 -- LAX
 AddOpcode(0xA7, "LAX", addressMode.GetZeroPageAddressMode, illegalOpcode.LAXFunction, 2, 3)
 AddOpcode(0xB7, "LAX", addressMode.GetZeroPage_YAddressMode, illegalOpcode.LAXFunction, 2, 4)

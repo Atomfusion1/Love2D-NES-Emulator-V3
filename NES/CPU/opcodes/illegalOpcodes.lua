@@ -29,7 +29,13 @@ local function CheckZeroAndNegativeFlag(value)
     setFlag("negative", resultNegative)
 end
 
-function opcodeFunction.NOPFunction(address)
+function opcodeFunction.NOPFunction(address, addressType)
+    -- Unofficial NOPs still perform their operand/dummy read.  For
+    -- immediate forms this is the operand address; for zero-page/absolute
+    -- forms the addressing mode returns the effective address.
+    if address ~= nil then
+        cpuRead(address)
+    end
     return 0, 0, 0
 end
 
@@ -45,6 +51,139 @@ function opcodeFunction.SAXFunction(address)
     local value = band(cpuInternal.A, cpuInternal.X)
     mainBus.CPUWrite(address, value)
     return value,0,0
+end
+
+-- SHA/AHX $93, documented "behavior 1" used by AccuracyCoin:
+-- value = A & X & (base high + 1).  If Y crosses a page, that same
+-- masked value also replaces the destination address's high byte.
+local function SHACommon(address)
+    local baseAddress = cpuInternal.unstableStoreBase or address
+    local highPlusOne = band(rshift(baseAddress, 8) + 1, 0xFF)
+    local value = band(cpuInternal.A, cpuInternal.X, highPlusOne)
+    local target = address
+
+    if cpuInternal.unstableStorePageCrossed then
+        target = bor(lshift(value, 8), band(address, 0xFF))
+    end
+
+    mainBus.CPUWrite(target, value)
+    cpuInternal.unstableStoreBase = nil
+    cpuInternal.unstableStorePageCrossed = nil
+    return value, 0, 0
+end
+
+function opcodeFunction.SHA93Function(address)
+    return SHACommon(address)
+end
+
+function opcodeFunction.SHA9FFunction(address)
+    return SHACommon(address)
+end
+
+function opcodeFunction.SHS9BFunction(address)
+    local baseAddress = cpuInternal.unstableStoreBase or address
+    local highPlusOne = band(rshift(baseAddress, 8) + 1, 0xFF)
+
+    -- TAS/SHS first copies A & X into SP, then stores SP & H.  Under the
+    -- documented behavior-1 page crossing, that value also becomes the
+    -- destination address's high byte.
+    cpuInternal.stackPointer = band(cpuInternal.A, cpuInternal.X)
+    local value = band(cpuInternal.stackPointer, highPlusOne)
+    local target = address
+
+    if cpuInternal.unstableStorePageCrossed then
+        target = bor(lshift(value, 8), band(address, 0xFF))
+    end
+
+    mainBus.CPUWrite(target, value)
+    cpuInternal.unstableStoreBase = nil
+    cpuInternal.unstableStorePageCrossed = nil
+    return value, 0, 0
+end
+
+local function MaskedRegisterStore(address, registerValue)
+    local baseAddress = cpuInternal.unstableStoreBase or address
+    local highPlusOne = band(rshift(baseAddress, 8) + 1, 0xFF)
+    local value = band(registerValue, highPlusOne)
+    local target = address
+
+    if cpuInternal.unstableStorePageCrossed then
+        target = bor(lshift(value, 8), band(address, 0xFF))
+    end
+
+    mainBus.CPUWrite(target, value)
+    cpuInternal.unstableStoreBase = nil
+    cpuInternal.unstableStorePageCrossed = nil
+    return value, 0, 0
+end
+
+function opcodeFunction.SHY9CFunction(address)
+    return MaskedRegisterStore(address, cpuInternal.Y)
+end
+
+function opcodeFunction.SHX9EFunction(address)
+    return MaskedRegisterStore(address, cpuInternal.X)
+end
+
+function opcodeFunction.LASBBFunction(address)
+    local value = band(cpuRead(address), cpuInternal.stackPointer)
+    cpuInternal.A = value
+    cpuInternal.X = value
+    cpuInternal.stackPointer = value
+    CheckZeroAndNegativeFlag(value)
+    return value, 0, 0
+end
+
+function opcodeFunction.ANCFunction(address)
+    local value = band(cpuInternal.A, cpuRead(address))
+    cpuInternal.A = value
+    CheckZeroAndNegativeFlag(value)
+    setFlag("carry", band(value, 0x80) ~= 0 and 1 or 0)
+    return value, 0, 0
+end
+
+function opcodeFunction.ASRFunction(address)
+    local value = band(cpuInternal.A, cpuRead(address))
+    setFlag("carry", band(value, 1))
+    value = rshift(value, 1)
+    cpuInternal.A = value
+    CheckZeroAndNegativeFlag(value)
+    return value, 0, 0
+end
+
+function opcodeFunction.ARRFunction(address)
+    local value = band(cpuInternal.A, cpuRead(address))
+    value = bor(rshift(value, 1), lshift(getFlag("carry"), 7))
+    cpuInternal.A = value
+    CheckZeroAndNegativeFlag(value)
+    setFlag("carry", band(value, 0x40) ~= 0 and 1 or 0)
+    setFlag("overflow", band(bxor(value, lshift(value, 1)), 0x40) ~= 0 and 1 or 0)
+    return value, 0, 0
+end
+
+function opcodeFunction.ANEFunction(address)
+    local value = band(cpuInternal.A, cpuInternal.X, cpuRead(address))
+    cpuInternal.A = value
+    CheckZeroAndNegativeFlag(value)
+    return value, 0, 0
+end
+
+function opcodeFunction.LXAFunction(address)
+    local value = band(cpuInternal.A, cpuRead(address))
+    cpuInternal.A = value
+    cpuInternal.X = value
+    CheckZeroAndNegativeFlag(value)
+    return value, 0, 0
+end
+
+function opcodeFunction.AXSFunction(address)
+    local value = band(cpuInternal.A, cpuInternal.X)
+    local operand = cpuRead(address)
+    setFlag("carry", value >= operand and 1 or 0)
+    value = band(value - operand, 0xFF)
+    cpuInternal.X = value
+    CheckZeroAndNegativeFlag(value)
+    return value, 0, 0
 end
 
 function CompareFunction(operand1, operand2)
@@ -128,6 +267,7 @@ function opcodeFunction.SLOFunction(address)
     SetCarryFlag(band(value, 0x80))
     CheckZeroAndNegativeFlag(result)
     if address then
+        mainBus.CPUWrite(address, value)
         mainBus.CPUWrite(address, result)
     else
         cpuInternal.A = result
@@ -146,6 +286,7 @@ function opcodeFunction.RLAFunction(address)
     result = band(result, 0xFF)
     SetCarryFlag(band(value, 0x80))
     CheckZeroAndNegativeFlag(result)
+    mainBus.CPUWrite(address, value)
     mainBus.CPUWrite(address, result)
 
     value = cpuRead(address)
@@ -161,6 +302,7 @@ function opcodeFunction.SREFunction(address)
     local flag = band(value, 0x01)
     setFlag("carry", flag)
     CheckZeroAndNegativeFlag(result)
+    mainBus.CPUWrite(address, value)
     mainBus.CPUWrite(address, result)
         
     value = cpuRead(address)
@@ -194,6 +336,7 @@ function opcodeFunction.RRAFunction(address)
     local result = bor(rshift(value, 1), lshift(getFlag("carry"), 7))
     SetCarryFlag(band(value, 0x01))
     CheckZeroAndNegativeFlag(result)
+    mainBus.CPUWrite(address, value)
     mainBus.CPUWrite(address, result)
     
     -- adc

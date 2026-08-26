@@ -64,6 +64,7 @@ function addressMode.GetAbsolute_XAddressMode()
     local absolute  = addressMode.GetAbsoluteAddressMode()
     local newAbsolute = Update16Bit(absolute, cpuInternal.X)
     if (bit.band(absolute, 0xff00)) ~= (bit.band(newAbsolute, 0xff00)) then
+        CPURead(bor(band(absolute, 0xFF00), band(newAbsolute, 0x00FF)))
         cycles = cycles + 1
     end
     return newAbsolute, "AbsoluteX", cycles
@@ -74,10 +75,12 @@ function addressMode.GetAbsolute_YAddressMode()
     local absolute  = addressMode.GetAbsoluteAddressMode()
     local newAbsolute = Update16Bit(absolute, cpuInternal.Y)
     if (bit.band(absolute, 0xff00)) ~= (bit.band(newAbsolute, 0xff00)) then
+        CPURead(bor(band(absolute, 0xFF00), band(newAbsolute, 0x00FF)))
         cycles = cycles + 1
     end
     return newAbsolute, "AbsoluteY", cycles
 end
+
 -- Get Indexed_Indirect_X
 function addressMode.GetIndexed_Indirect_XMode()
     local address8Bit   = Update8Bit(CPURead(Update16Bit(cpuInternal.programCounter, 1)), cpuInternal.X)
@@ -95,9 +98,94 @@ function addressMode.GetIndirect_Indexed_YMode()
     local Address16bit  = ((HighByte16 * 0x100) + LowByte16)
     local Address16AddY = Update16Bit(Address16bit,cpuInternal.Y)
     if (bit.band(Address16bit, 0xff00)) ~= (bit.band(Address16AddY, 0xff00)) then
+        CPURead(bor(band(Address16bit, 0xFF00), band(Address16AddY, 0x00FF)))
         cycles = cycles + 1
     end
     return Address16AddY, "IndirectIndexedY", cycles
+end
+
+-- Indexed stores always perform their pre-write dummy read.  Unlike indexed
+-- loads, this happens whether or not the addition crosses a page.
+function addressMode.GetAbsolute_XStoreAddressMode()
+    local absolute = addressMode.GetAbsoluteAddressMode()
+    local effective = Update16Bit(absolute, cpuInternal.X)
+    CPURead(bor(band(absolute, 0xFF00), band(effective, 0x00FF)))
+    return effective, "AbsoluteXStore", 0
+end
+
+function addressMode.GetAbsolute_YStoreAddressMode()
+    local absolute = addressMode.GetAbsoluteAddressMode()
+    local effective = Update16Bit(absolute, cpuInternal.Y)
+    CPURead(bor(band(absolute, 0xFF00), band(effective, 0x00FF)))
+    return effective, "AbsoluteYStore", 0
+end
+
+function addressMode.GetIndirect_Indexed_YStoreMode()
+    local pointer = CPURead(Update16Bit(cpuInternal.programCounter, 1))
+    local lowByte = CPURead(pointer)
+    local highByte = CPURead(Update8Bit(pointer, 1))
+    local absolute = highByte * 0x100 + lowByte
+    local effective = Update16Bit(absolute, cpuInternal.Y)
+    CPURead(bor(band(absolute, 0xFF00), band(effective, 0x00FF)))
+    return effective, "IndirectIndexedYStore", 0
+end
+
+-- $93 SHA needs the unindexed pointer high byte after address calculation.
+-- Keep that information for the opcode action and retain the instruction's
+-- fixed six-cycle timing even when Y crosses a page.
+function addressMode.GetSHA_IndirectYAddressMode()
+    local pointer = CPURead(Update16Bit(cpuInternal.programCounter, 1))
+    local lowByte = CPURead(pointer)
+    local highByte = CPURead(Update8Bit(pointer, 1))
+    local baseAddress = highByte * 0x100 + lowByte
+    local effectiveAddress = Update16Bit(baseAddress, cpuInternal.Y)
+
+    cpuInternal.unstableStoreBase = baseAddress
+    cpuInternal.unstableStorePageCrossed =
+        band(baseAddress, 0xFF00) ~= band(effectiveAddress, 0xFF00)
+
+    return effectiveAddress, "SHAIndirectY", 0
+end
+
+-- $9F SHA absolute,Y uses the same unstable-store information as $93,
+-- but starts from the 16-bit operand encoded directly in the instruction.
+function addressMode.GetSHA_AbsoluteYAddressMode()
+    local lowByte = CPURead(band(cpuInternal.programCounter + 1, 0xFFFF))
+    local highByte = CPURead(band(cpuInternal.programCounter + 2, 0xFFFF))
+    local baseAddress = highByte * 0x100 + lowByte
+    local effectiveAddress = Update16Bit(baseAddress, cpuInternal.Y)
+
+    cpuInternal.unstableStoreBase = baseAddress
+    cpuInternal.unstableStorePageCrossed =
+        band(baseAddress, 0xFF00) ~= band(effectiveAddress, 0xFF00)
+
+    return effectiveAddress, "SHAAbsoluteY", 0
+end
+
+function addressMode.GetSHY_AbsoluteXAddressMode()
+    local lowByte = CPURead(band(cpuInternal.programCounter + 1, 0xFFFF))
+    local highByte = CPURead(band(cpuInternal.programCounter + 2, 0xFFFF))
+    local baseAddress = highByte * 0x100 + lowByte
+    local effectiveAddress = Update16Bit(baseAddress, cpuInternal.X)
+
+    cpuInternal.unstableStoreBase = baseAddress
+    cpuInternal.unstableStorePageCrossed =
+        band(baseAddress, 0xFF00) ~= band(effectiveAddress, 0xFF00)
+
+    return effectiveAddress, "SHYAbsoluteX", 0
+end
+
+function addressMode.GetSHX_AbsoluteYAddressMode()
+    local lowByte = CPURead(band(cpuInternal.programCounter + 1, 0xFFFF))
+    local highByte = CPURead(band(cpuInternal.programCounter + 2, 0xFFFF))
+    local baseAddress = highByte * 0x100 + lowByte
+    local effectiveAddress = Update16Bit(baseAddress, cpuInternal.Y)
+
+    cpuInternal.unstableStoreBase = baseAddress
+    cpuInternal.unstableStorePageCrossed =
+        band(baseAddress, 0xFF00) ~= band(effectiveAddress, 0xFF00)
+
+    return effectiveAddress, "SHXAbsoluteY", 0
 end
 
 -- Stack Control

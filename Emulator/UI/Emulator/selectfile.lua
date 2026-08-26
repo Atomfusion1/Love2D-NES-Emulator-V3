@@ -13,6 +13,11 @@ local selected_file_index = 5
 selectFile.lastInputChar = ""
 local fileList = {}
 
+local function setScrollOffset(value)
+    local maximum = math.max(#fileList - files_per_column, 0)
+    scroll_offset = math.max(0, math.min(value or 0, maximum))
+end
+
 
 local function listFilesInDirectory(directory)
     fileList = love.filesystem.getDirectoryItems(directory)
@@ -45,6 +50,7 @@ end
 
 function selectFile.DrawPopup()
     if selectFile.isPopupVisible then
+        setScrollOffset(scroll_offset)
         local x = (love.graphics.getWidth() - popupWidth) / 2
         local y = (love.graphics.getHeight() - popupHeight) / 2
         local mx, my = love.mouse.getPosition()
@@ -63,7 +69,7 @@ function selectFile.DrawPopup()
         local files = fileList
         local file_list_start_y = y + 100
         local file_list_spacing = 20
-        for i = scroll_offset + 1, math.min(scroll_offset + files_per_column, #files) do
+        for i = math.max(scroll_offset + 1, 1), math.min(scroll_offset + files_per_column, #files) do
             local file = files[i]
             local row = (i - 1 - scroll_offset) % files_per_column
             local file_x = x + 10
@@ -147,10 +153,10 @@ end
 
 function selectFile.WheelMoved(x, y)
     if selectFile.isPopupVisible then
-        if y > 0 and scroll_offset > 0 then
-            scroll_offset = scroll_offset - 4
-        elseif y < 0 and scroll_offset < #fileList - files_per_column then
-            scroll_offset = scroll_offset + 4
+        if y > 0 then
+            setScrollOffset(scroll_offset - 4)
+        elseif y < 0 then
+            setScrollOffset(scroll_offset + 4)
         end
     end
 end
@@ -162,13 +168,13 @@ local keypressed = {
     ["up"] = function()
         selected_file_index = math.max(selected_file_index - 1, 1)
         if selected_file_index <= scroll_offset and scroll_offset > 0 then
-            scroll_offset = scroll_offset - 1
+            setScrollOffset(scroll_offset - 1)
         end
     end,
     ["down"] = function()
         selected_file_index = math.min(selected_file_index + 1, #files)
         if selected_file_index > scroll_offset + files_per_column and scroll_offset < #files - files_per_column then
-            scroll_offset = scroll_offset + 1
+            setScrollOffset(scroll_offset + 1)
         end
     end,
     ["space"] = function()
@@ -194,7 +200,7 @@ function love.textinput(text)
         local files = fileList
         for i, file in ipairs(files) do
             if file:sub(1, 1):lower() == selectFile.lastInputChar then
-                scroll_offset = i - 1
+                setScrollOffset(i - 1)
                 selected_file_index = i -- Update the selected file index to jump the arrow selection
                 break
             end
@@ -235,13 +241,13 @@ local gamepadIsDown = {
     ["dpup"] = function()
             selected_file_index = math.max(selected_file_index - 1, 1)
             if selected_file_index <= scroll_offset and scroll_offset > 0 then
-                scroll_offset = scroll_offset - 1
+                setScrollOffset(scroll_offset - 1)
             end
         end,
     ["dpdown"] = function()
             selected_file_index = math.min(selected_file_index + 1, #files)
             if selected_file_index > scroll_offset + files_per_column and scroll_offset < #files - files_per_column then
-                scroll_offset = scroll_offset + 1
+                setScrollOffset(scroll_offset + 1)
             end
         end,
     ["start"] = function()
@@ -253,12 +259,12 @@ local gamepadIsDown = {
     ["rightshoulder"] = function()
         local files = fileList
         selected_file_index = findNextLetterIndex(files, selected_file_index, "next")
-        scroll_offset = math.max(selected_file_index - files_per_column + 1, 0)
+        setScrollOffset(selected_file_index - files_per_column + 1)
     end,
     ["leftshoulder"] = function()
         local files = fileList
         selected_file_index = findNextLetterIndex(files, selected_file_index, "previous")
-        scroll_offset = math.min(selected_file_index - 1, #files - files_per_column)
+        setScrollOffset(selected_file_index - 1)
     end,
 }
 

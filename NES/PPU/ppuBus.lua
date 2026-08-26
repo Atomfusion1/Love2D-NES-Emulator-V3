@@ -12,10 +12,28 @@ local debugPPU2006 = false
 local debugPPU2000 = false
 
 local ppu_data_buffer = 0x00
+local ppu_io_latch = 0x00
 local vRamAddress = 0x00
+
+local function readOAMData()
+    local address = bit.band(ppuIO.OAMADDR or 0, 0xFF)
+    local data = OAM[address] or 0x00
+
+    -- Byte 2 of each sprite is the attribute byte.  The internal OAM data
+    -- bus does not expose the unused attribute bits, so they read as zero.
+    if bit.band(address, 0x03) == 0x02 then
+        data = bit.band(data, 0xE3)
+    end
+
+    -- Reading OAMDATA does not increment OAMADDR.  Reads performed while
+    -- the PPU is actively clearing/evaluating secondary OAM need the
+    -- dot-level evaluation bus and are intentionally left for that model.
+    return data
+end
 
 function ppuBus.Reset()
     ppu_data_buffer = 0x00
+    ppu_io_latch = 0x00
     vRamAddress = 0x00
 
     for tableIndex = 0, 1 do
@@ -31,22 +49,34 @@ end
 
 local CPURegisters = {
     readHandlers = {
-        [0x0000] = function () return 0x00 end, -- control
-        [0x0001] = function () return 0x00 end, -- mask
+        [0x0000] = function () return ppu_io_latch end, -- control (write-only/open bus)
+        [0x0001] = function () return ppu_io_latch end, -- mask (write-only/open bus)
         [0x0002] = function ()                  -- status       
-            local data = bit.bor(bit.band(ppuIO.STATUS,0xE0),bit.band(ppu_data_buffer,0x1F))
+            local data = bit.bor(bit.band(ppuIO.STATUS,0xE0),bit.band(ppu_io_latch,0x1F))
             loopy:ResetWriteToggle()
             ppuIO.STATUS = bit.band(ppuIO.STATUS,0x7F)
             return data end,
-        [0x0003] = function () return 0x00 end, -- OAM address
-        [0x0004] = function () return 0x00 end, -- OAM Data
-        [0x0005] = function () return 0x00 end, -- Scroll
-        [0x0006] = function () return 0x00 end, -- PPU Address
-        [0x0007] = function () -- Delay Output from PPU one Read so store it then give it the next read
-            local data = ppu_data_buffer
-            ppu_data_buffer = ppuBus.PPURead(loopy.v)
-            -- but if its palette data send right away
-            if loopy.v >= 0x3F00 then data = ppu_data_buffer end
+        [0x0003] = function () return ppu_io_latch end, -- OAM address (write-only/open bus)
+        [0x0004] = readOAMData, -- OAM Data
+        [0x0005] = function () return ppu_io_latch end, -- Scroll (write-only/open bus)
+        [0x0006] = function () return ppu_io_latch end, -- PPU Address (write-only/open bus)
+        [0x0007] = function () -- PPUDATA read buffer
+            local address = bit.band(loopy.v, 0x3FFF)
+            local data
+
+            if address >= 0x3F00 then
+                -- Palette RAM bypasses the delayed return.  Its upper two
+                -- result bits are open bus, while the hidden read performed
+                -- at the same time refills the buffer from the mirrored
+                -- nametable underneath the palette range.
+                local paletteData = ppuBus.PPURead(address)
+                data = bit.bor(bit.band(ppu_io_latch, 0xC0), bit.band(paletteData, 0x3F))
+                ppu_data_buffer = ppuBus.PPURead(address - 0x1000)
+            else
+                data = ppu_data_buffer
+                ppu_data_buffer = ppuBus.PPURead(address)
+            end
+
             -- update Pointer location         
             if ppuIO.IsBitSet(ppuIO.CTRL, 2) then
                 loopy:IncrementV(32)
@@ -151,7 +181,9 @@ local CPURegisters = {
 
 function ppuBus.CPURead(addr)
     if CPURegisters.readHandlers[addr] then
-        return CPURegisters.readHandlers[addr]()
+        local data = bit.band(CPURegisters.readHandlers[addr]() or 0, 0xFF)
+        ppu_io_latch = data
+        return data
     end
     print("PPU Read Error " .. addr)
     return 0x00
@@ -161,19 +193,20 @@ end
 -- Normal CPURead must retain hardware behavior (for example $2002 clears
 -- status and $2007 advances VRAM), so the memory viewer must not use it.
 function ppuBus.CPUPeek(addr)
-    if addr == 0x0000 then return ppuIO.CTRL
-    elseif addr == 0x0001 then return ppuIO.MASKS
+    if addr == 0x0000 then return ppu_io_latch
+    elseif addr == 0x0001 then return ppu_io_latch
     elseif addr == 0x0002 then return ppuIO.STATUS
-    elseif addr == 0x0003 then return ppuIO.OAMADDR
-    elseif addr == 0x0004 then return OAM[ppuIO.OAMADDR] or 0
-    elseif addr == 0x0005 then return ppuIO.SCROLL
-    elseif addr == 0x0006 then return ppuIO.ADDR
+    elseif addr == 0x0003 then return ppu_io_latch
+    elseif addr == 0x0004 then return readOAMData()
+    elseif addr == 0x0005 then return ppu_io_latch
+    elseif addr == 0x0006 then return ppu_io_latch
     elseif addr == 0x0007 then return ppuIO.DATA
     end
     return 0
 end
 
 function ppuBus.CPUWrite(addr, data)
+    ppu_io_latch = bit.band(data or 0, 0xFF)
     if CPURegisters.writeHandlers[addr] then
         CPURegisters.writeHandlers[addr](addr, data)
     end
@@ -204,7 +237,13 @@ function ppuBus.PPURead(addr)
         if paletteAddress == 0x14 then paletteAddress = 0x04 end
         if paletteAddress == 0x18 then paletteAddress = 0x08 end
         if paletteAddress == 0x1C then paletteAddress = 0x0C end
-        return tblPalette[paletteAddress]
+        local value = bit.band(tblPalette[paletteAddress] or 0, 0x3F)
+        -- Greyscale affects the value presented by palette RAM, not the
+        -- value stored there.  Only the luminance column remains visible.
+        if bit.band(ppuIO.MASKS, 0x01) ~= 0 then
+            value = bit.band(value, 0x30)
+        end
+        return value
     end
 end
 
@@ -228,7 +267,9 @@ end
             if addr == 0x0014 then addr = 0x0004 end
             if addr == 0x0018 then addr = 0x0008 end
             if addr == 0x001C then addr = 0x000C end
-            nameTable.tblPalette[addr] = data
+            -- Palette RAM contains six data bits.  Greyscale mode masks
+            -- reads/output only and must not modify writes.
+            nameTable.tblPalette[addr] = bit.band(data, 0x3F)
             return
         else
             print(string.format("PPU Error Write Memory %x %x", addr, data))

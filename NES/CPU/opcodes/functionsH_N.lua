@@ -27,6 +27,7 @@ end
 
 function opcodeFunction.INCFunction(address, addressType)
     local value = cpuRead(address)
+    mainBus.CPUWrite(address, value)
     mainBus.CPUWrite(address, IncramentFunction(value))
     return 0,0,0
 end
@@ -39,17 +40,20 @@ end
 function opcodeFunction.JSRFunction(address)
     -- Store Highbyte
     mainBus.CPUWrite(0x100 + cpuInternal.stackPointer , (rshift(band(cpuInternal.programCounter + 2, 0xFF00), 8)))
-    cpuInternal.stackPointer    = cpuInternal.stackPointer - 1
+    cpuInternal.stackPointer    = band(cpuInternal.stackPointer - 1, 0xFF)
     -- Store Lowbyte
     mainBus.CPUWrite(0x100 + cpuInternal.stackPointer , (band(cpuInternal.programCounter + 2, 0xFF)))
-    cpuInternal.stackPointer    = cpuInternal.stackPointer - 1
+    cpuInternal.stackPointer    = band(cpuInternal.stackPointer - 1, 0xFF)
     -- Jump to Target
     cpuInternal.programCounter = mainBus.CPURead(band(cpuInternal.programCounter + 2, 0xFFFF)) * 0x100 + mainBus.CPURead(band(cpuInternal.programCounter + 1, 0xFFFF))
     -- Simplified return statement
     return 0, -1, 0
 end
 
-function opcodeFunction.NOPFunction(address)
+function opcodeFunction.NOPFunction(address, addressType)
+    if address ~= nil then
+        cpuRead(address)
+    end
     return 0, 0, 0
 end
 
@@ -87,6 +91,7 @@ function opcodeFunction.LSRFunction(address, addressType)
     if address == nil then
         cpuInternal.A = result
     else
+        mainBus.CPUWrite(address, value)
         mainBus.CPUWrite(address, result)
     end
     return 0, 0, 0

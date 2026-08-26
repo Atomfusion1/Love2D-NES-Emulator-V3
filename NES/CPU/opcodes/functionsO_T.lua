@@ -128,6 +128,7 @@ function opcodeFunction.RORFunction(address, addressType)
     cpuInternal.statusRegister = ((band(result, 0xFF) == 0) and 1 or 0 == 1) and bor(cpuInternal.statusRegister, 0x02) or band(cpuInternal.statusRegister, bnot(0x02))
     cpuInternal.statusRegister = ((band(result, 0x80) ~= 0) and 1 or 0 == 1) and bor(cpuInternal.statusRegister, 0x80) or band(cpuInternal.statusRegister, bnot(0x80))
     if address then
+        mainBus.CPUWrite(address, value)
         mainBus.CPUWrite(address, result)
     else
         cpuInternal.A = result
@@ -143,6 +144,7 @@ function opcodeFunction.ROLFunction(address, addressType)
     cpuInternal.statusRegister = ((band(result, 0xFF) == 0) and 1 or 0 == 1) and bor(cpuInternal.statusRegister, 0x02) or band(cpuInternal.statusRegister, bnot(0x02))
     cpuInternal.statusRegister = ((band(result, 0x80) ~= 0) and 1 or 0 == 1) and bor(cpuInternal.statusRegister, 0x80) or band(cpuInternal.statusRegister, bnot(0x80))
     if address then
+        mainBus.CPUWrite(address, value)
         mainBus.CPUWrite(address, result)
     else
         cpuInternal.A = result
@@ -154,7 +156,9 @@ function opcodeFunction.RTIFunction(value)
     -- Get Past Flag Status
     local flagByte = addressMode.ReadFromStack()
     -- Flag must have bit 5 high
-    flagByte = bor(flagByte, 0x20)
+    -- B is not a stored processor flag.  It is synthesized only when PHP
+    -- or BRK pushes status, and must be clear when status is restored.
+    flagByte = band(bor(flagByte, 0x20), 0xEF)
     cpuInternal.statusRegister = flagByte
     -- Get Low Byte
     local lowbyte = addressMode.ReadFromStack()

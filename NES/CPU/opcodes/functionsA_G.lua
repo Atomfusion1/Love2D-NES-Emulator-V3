@@ -56,6 +56,9 @@ function opcodeFunction.ASLFunction(address, addressType)
     cpuInternal.statusRegister = ((band(result, 0xFF) == 0) and 1 or 0 == 1) and bor(cpuInternal.statusRegister, 0x02) or band(cpuInternal.statusRegister, bnot(0x02))
     cpuInternal.statusRegister = ((band(result, 0x80) ~= 0) and 1 or 0 == 1) and bor(cpuInternal.statusRegister, 0x80) or band(cpuInternal.statusRegister, bnot(0x80))
     if address then
+        -- Read-modify-write instructions expose the original value during
+        -- the intermediate write cycle.
+        mainBus.CPUWrite(address, value)
         mainBus.CPUWrite(address, result)
     else
         cpuInternal.A = result
@@ -208,6 +211,7 @@ end
 
 function opcodeFunction.DECFunction(address, addressType)
     local value = cpuRead(address)
+    mainBus.CPUWrite(address, value)
     mainBus.CPUWrite(address, DecrementFunction(value))
     return 0,0,0
 end

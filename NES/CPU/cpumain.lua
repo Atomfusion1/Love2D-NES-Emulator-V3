@@ -159,6 +159,7 @@ function cpu.ExecuteCycles(totalCycles)
         
         -- If an interrupt was handled, add its cycles and skip normal opcode fetch
         if interruptCycles > 0 then
+            apu.Clock(interruptCycles)
             cycleCount = cycleCount + interruptCycles
             cpu.totalCycles = cpu.totalCycles + interruptCycles
             ppuCycleDebt = ppuCycleDebt + interruptCycles
@@ -191,6 +192,7 @@ function cpu.ExecuteCycles(totalCycles)
             -- Update cycle count and debug information
             cycleCount = cycleCount + cycleCost
             cpu.totalCycles = cpu.totalCycles + cycleCost
+            apu.Clock(cycleCost)
             ppuCycleDebt = ppuCycleDebt + cycleCost
             
             if addressMode.debugPrint then

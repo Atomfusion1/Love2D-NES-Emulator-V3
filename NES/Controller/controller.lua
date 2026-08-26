@@ -15,26 +15,45 @@ controller.Controller1State  = 0x00
 controller.Controller2State  = 0x00
 local Controller1FreezeState = 0x00
 local Controller2FreezeState = 0x00
+local controllerStrobe = false
+
+local function latchControllers()
+    Controller1FreezeState = controller.Controller1State
+    Controller2FreezeState = controller.Controller2State
+end
 
 --# Read Out Controller Bit
 function controller.ReadState(addr)
     if addr == 0x4016 then
-        local data             = bit.band(Controller1FreezeState, 0x80) > 0 and 1 or 0
-        Controller1FreezeState = bit.lshift(Controller1FreezeState, 1)
+        local state = controllerStrobe and controller.Controller1State or Controller1FreezeState
+        local data = bit.band(state, 0x80) > 0 and 1 or 0
+        if not controllerStrobe then
+            -- After the eight buttons have shifted out, a standard NES
+            -- controller keeps returning 1.
+            Controller1FreezeState = bit.band(bit.bor(bit.lshift(Controller1FreezeState, 1), 1), 0xFF)
+        end
         return data
     end
     if addr == 0x4017 then
-        local data             = bit.band(Controller2FreezeState, 0x80) > 0 and 1 or 0
-        Controller2FreezeState = bit.lshift(Controller2FreezeState, 1)
+        local state = controllerStrobe and controller.Controller2State or Controller2FreezeState
+        local data = bit.band(state, 0x80) > 0 and 1 or 0
+        if not controllerStrobe then
+            Controller2FreezeState = bit.band(bit.bor(bit.lshift(Controller2FreezeState, 1), 1), 0xFF)
+        end
         return data
     end
 end
 
 --# Set Controller State
-function controller.GetState(addr)
+function controller.GetState(addr, data)
     if addr == 0x4016 then
-        Controller1FreezeState = controller.Controller1State
-        Controller2FreezeState = controller.Controller2State
+        local newStrobe = bit.band(data or 0, 0x01) ~= 0
+        if newStrobe or controllerStrobe then
+            -- While strobe is high the controller continuously reloads; the
+            -- falling edge leaves the latest state in the shift registers.
+            latchControllers()
+        end
+        controllerStrobe = newStrobe
     end
 end
 
@@ -45,6 +64,7 @@ function controller.Reset()
     controller.Controller2State = 0x00
     Controller1FreezeState = 0x00
     Controller2FreezeState = 0x00
+    controllerStrobe = false
 end
 
 -- # Setup Key Pressed Values 
