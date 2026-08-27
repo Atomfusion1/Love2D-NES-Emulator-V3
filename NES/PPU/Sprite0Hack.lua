@@ -1,6 +1,13 @@
 local Sprite0Hack = {}
 
 local gamesSprite0Offset = {
+    ["Roms/Battletoads (U) [p1].nes"] = {
+        -- Keep sprite-0 and normal split timing unchanged. Shift only the
+        -- BG-off -> BG-on boundary upward in the saved-frame renderer.
+        sprite0Offset = 2,
+        scanLineOffset = 0,
+        backgroundEnableOffset = -7
+    },
     ["Roms/NinjaGaiden.nes"] = {
         sprite0Offset = 8,
         scanLineOffset = 8
@@ -72,6 +79,13 @@ function Sprite0Hack:CheckForScanLineOffset(gameName)
         return gamesSprite0Offset[gameName].scanLineOffset
     end
     print("NO Scan Line Offset")
+    return 0
+end
+
+function Sprite0Hack:CheckForBackgroundEnableOffset(gameName)
+    if gamesSprite0Offset[gameName] then
+        return gamesSprite0Offset[gameName].backgroundEnableOffset or 0
+    end
     return 0
 end
 

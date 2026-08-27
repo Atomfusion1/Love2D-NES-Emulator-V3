@@ -39,9 +39,9 @@ function mapper.CPUWrite(addr, data)
 
         if loopy.scanLine < 240 then
             loopy:SearchPPUStatesInRangeAndReplace(
-                loopy.scanLine - 1,
-                loopy.scanLine + 1,
-                require("NES.PPU.ppu").GetPPUState(loopy.scanLine)
+                loopy.scanLine,
+                loopy.scanLine,
+                require("NES.PPU.ppu").GetPPUState(loopy.scanLine, nil, nil, "mapper")
             )
         end
     end
@@ -58,6 +58,9 @@ end
 function mapper.PPUWrite(addr, data)
     if addr >= 0x0000 and addr <= 0x1FFF then
         mapper.chrRAM[addr] = data
+        -- Battletoads streams animation tiles while rendering is disabled.
+        -- Ensure the next saved PPU state captures the new CHR contents.
+        mapper.chrDirty = true
         return true
     end
 

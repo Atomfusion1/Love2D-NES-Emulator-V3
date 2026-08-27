@@ -10,6 +10,11 @@ local rshift, band, bor = bit.rshift, bit.band, bit.bor
 
 local bus        = {}
 local pendingOAMDMA
+local CPURAM = memory.cpuRAM
+local cachedMapper
+local cachedMapperCPURead
+local cachedMapperCPUWrite
+local cachedMapperCheckIRQ
 -- CPU data-bus latch used by unmapped/open-bus reads.  Operand fetches and
 -- ordinary mapped reads naturally update it; an open-bus read leaves it
 -- unchanged, matching the 2A03 bus behavior.
@@ -31,21 +36,26 @@ end
 
 --# Initialize Mapper Cache
 function bus.RefreshMapperCache()
-
+    cachedMapper = mapper[cart.mapper] and mapper[cart.mapper].mapper or nil
+    cachedMapperCPURead = cachedMapper and cachedMapper.CPURead or nil
+    cachedMapperCPUWrite = cachedMapper and cachedMapper.CPUWrite or nil
+    cachedMapperCheckIRQ = cachedMapper and cachedMapper.CheckIRQ or nil
 end
 
 --# CPU BUS READ 
 function bus.CPURead(addr)
-    local CPURAM = memory.cpuRAM
-    local cartMapper = mapper[cart.mapper].mapper
-    local CPURead = cartMapper.CPURead
+    local mapperRead = cachedMapperCPURead
+    if not mapperRead then
+        bus.RefreshMapperCache()
+        mapperRead = cachedMapperCPURead
+    end
 --% Read Cartridge Prog Memory ROM
     if addr >= 0x4020 then
         -- $4020-$FFFF belongs to the cartridge.  In particular, many
         -- mappers expose PRG RAM at $6000-$7FFF, so this range must not be
         -- treated globally as open bus.  The mapper decides which portions
         -- are backed or unmapped.
-        return driveBus(CPURead(addr))
+        return driveBus(mapperRead(addr))
 --% Read Internal CPU RAM
     elseif addr < 0x2000 then
         local cpuRAMIndex    = band(addr, 0x07ff)
@@ -78,10 +88,13 @@ end
 
 -- Debugger-only CPU read that never invokes register read side effects.
 function bus.CPUPeek(addr)
-    local CPURAM = memory.cpuRAM
-    local cartMapper = mapper[cart.mapper].mapper
+    local mapperRead = cachedMapperCPURead
+    if not mapperRead then
+        bus.RefreshMapperCache()
+        mapperRead = cachedMapperCPURead
+    end
     if addr >= 0x4020 then
-        return cartMapper.CPURead(addr)
+        return mapperRead(addr)
     elseif addr < 0x2000 then
         return CPURAM[band(addr, 0x07ff)]
     elseif addr >= 0x2000 and addr <= 0x3FFF then
@@ -96,8 +109,11 @@ end
 --# CPU BUS WRITE
 function bus.CPUWrite(addr, data)
     local CPUWrite = ppuBus.CPUWrite
-    local CPURAM = memory.cpuRAM
-    local cartMapper = mapper[cart.mapper].mapper
+    local mapperWrite = cachedMapperCPUWrite
+    if not mapperWrite then
+        bus.RefreshMapperCache()
+        mapperWrite = cachedMapperCPUWrite
+    end
     local UseSound = UseSound
     data = band(data or 0, 0xFF)
     -- A CPU write drives the data bus even when the target is not mapped.
@@ -137,7 +153,7 @@ function bus.CPUWrite(addr, data)
             apu.FrameCounterWrite(data)
         end
     elseif addr >= 0x4020 and addr <= 0xFFFF then
-        cartMapper.CPUWrite(addr, data)
+        mapperWrite(addr, data)
     else
         print(string.format("CPU Error Write Memory %x %x", addr, data))
     end
@@ -146,9 +162,8 @@ end
 --# Check IRQ 
 function bus.CheckIRQ()
     if apu.CheckIRQ() then return true end
-    if cart.mapper == 4 then
-        return mapper[cart.mapper].mapper.CheckIRQ()
-    end
+    if cachedMapperCheckIRQ then return cachedMapperCheckIRQ() end
+    return false
 end
 
 -- Starter DMC reads use the normal CPU address map. Cycle stealing is added

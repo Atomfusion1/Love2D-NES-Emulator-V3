@@ -113,11 +113,11 @@ local function SelectAttributeValue(attributeTable, c_X, c_Y)
 end
 
 --# Draw Main Screen Helper
-local function calculateTileAndAttributeAddresses(ScrollX, ScrollY, localNamespace)
+local function calculateTileAndAttributeAddresses(ScrollX, ScrollY, localNamespace, mirrorMode)
     local tileAddress         = localNamespace + ScrollY * 32 + ScrollX
-    local tileID              = nameTable.NameTableMirrorRead(tileAddress)
+    local tileID              = nameTable.NameTableMirrorRead(tileAddress, mirrorMode)
     local attributeAddress    = 0x03C0 + (rshift(ScrollY, 2)) * 8 + rshift(ScrollX, 2) + localNamespace
-    local attributeByte       = nameTable.NameTableMirrorRead(attributeAddress)
+    local attributeByte       = nameTable.NameTableMirrorRead(attributeAddress, mirrorMode)
     local attributeValue      = SelectAttributeValue(attributeByte, ScrollX, ScrollY)
     return tileID, attributeValue
 end
@@ -143,46 +143,110 @@ end
 
 printScanline = 100
 
+local renderStatesCache = nil
+local renderStatesCacheSource = nil
+local renderStatesCacheVersion = -1
+
+local function getRenderStates()
+    if renderStatesCache
+        and renderStatesCacheSource == loopy.ppuStates
+        and renderStatesCacheVersion == (loopy.ppuStatesVersion or 0) then
+        return renderStatesCache
+    end
+    local renderStates = {}
+    for _, state in ipairs(loopy.ppuStates) do
+        if state.trigger ~= "inspect" then
+            renderStates[#renderStates + 1] = state
+        end
+    end
+    renderStatesCache = renderStates
+    renderStatesCacheSource = loopy.ppuStates
+    renderStatesCacheVersion = loopy.ppuStatesVersion or 0
+    return renderStatesCache
+end
+
 --! MAIN DRAW LOOP 
 --! ****************************
 function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
     local ppuIRQCount = 1
-    local states = loopy.ppuStates
+    local states = getRenderStates()
     local state = states[1]
     if not state then return end
     local nametableX, nametableY = state.namespace_x, state.namespace_y
     local coarseScrollX, coarseScrollY = state.offset_x, state.offset_y
     local fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
     local tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
-    local scanLineOffset = require("NES.PPU.ppu").scanLineOffset
+    -- Historical frame rendering must never alter the mapper's live mirror.
+    local renderMirror = state.mapperMirror or state.mirror
+    local ppuSettings = require("NES.PPU.ppu")
+    local scanLineOffset = ppuSettings.scanLineOffset
+    local backgroundEnableOffset = ppuSettings.backgroundEnableOffset or 0
     local scanLine = -1
     local baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
-    local screenY = 0
+    -- screenY is the output row. sourceRow is the row relative to the
+    -- current state.  They are normally the same, but a completed $2006
+    -- split starts a new source viewport at the split scanline.
+    local sourceRow = 0
     for tileY = 0, 30 do
         for fineY = 0, 7 do
-            if scanLine < 241 and states[ppuIRQCount + 1]
-                and scanLine == states[ppuIRQCount + 1].scanLine + scanLineOffset then
+            local nextState = states[ppuIRQCount + 1]
+            local nextStateOffset = scanLineOffset
+            if nextState and nextState.trigger == "$2001"
+                and state.isDrawScreen == false and nextState.isDrawScreen ~= false then
+                nextStateOffset = nextStateOffset + backgroundEnableOffset
+            end
+            if scanLine < 241 and nextState
+                and scanLine == nextState.scanLine + nextStateOffset then
                 ppuIRQCount = ppuIRQCount + 1
-                state = states[ppuIRQCount]
+                local previousState = state
+                state = nextState
                 -- A PPUMASK ($2001) state is a rendering-layer change, not a
                 -- scroll/nametable change. Keep the prior background source
                 -- so enabling sprites or masking the screen cannot blank or
                 -- reposition the map.
-                if state.trigger ~= "$2001" then
+                if state.mapperEvent then
+                    -- Mapper 7 bank/mirroring writes are cartridge events.
+                    -- They must not replace the PPU's v/t/x scroll origin.
+                    tileSet = state.mapperSpriteTileSet or state.spriteTileSet
+                    renderMirror = state.mapperMirror or state.mirror
+                end
+                local bgWasEnabled = previousState.isDrawScreen ~= false
+                local bgIsEnabled = state.isDrawScreen ~= false
+                local spritesWereEnabled = previousState.isDrawSprites ~= false
+                if state.trigger == "$2001" and not bgWasEnabled and bgIsEnabled then
+                    -- Rendering was disabled, so the PPU did not consume
+                    -- background rows.  Enabling BG starts this visible
+                    -- portion from the current scroll origin.
                     nametableX, nametableY = state.namespace_x, state.namespace_y
                     coarseScrollX, coarseScrollY = state.offset_x, state.offset_y
                     fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
                     tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
-                    cart.Mirror = state.mirror
+                    renderMirror = state.mapperMirror or state.mirror
+                    baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
+                    -- If sprites were already rendering, the PPU was still
+                    -- consuming rendering time and the source row must keep
+                    -- advancing. Reset only after a fully disabled interval.
+                    if not spritesWereEnabled then
+                        sourceRow = 0
+                    end
+                elseif state.trigger ~= "$2001" and state.trigger ~= "mapper" then
+                    nametableX, nametableY = state.namespace_x, state.namespace_y
+                    coarseScrollX, coarseScrollY = state.offset_x, state.offset_y
+                    fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
+                    tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
+                    renderMirror = state.mapperMirror or state.mirror
                     baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
                     if state.is2006 then
-                        local holder = tileY - state.offsetY
-                        coarseScrollY = -holder
+                        -- $2006 supplies a new VRAM origin.  Battletoads and
+                        -- similar games use this to restart drawing from the
+                        -- top of the newly selected scroll box.  Do not apply
+                        -- this to ordinary $2005/$2000 mid-frame changes.
+                        sourceRow = 0
                     end
                 end
             end
             local tileYIndex, effectiveNametableY = loopy.AdvanceVertical(
-                coarseScrollY, nametableY, screenY)
+                coarseScrollY, nametableY, sourceRow)
             if state.isDrawScreen ~= false then
                 for tileX = -1, 32 do
                     local screenTileX = baseScreenX + tileX * 8
@@ -199,7 +263,7 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                     local localNamespace = 0x2000
                         + effectiveNametableX * 0x400 + effectiveNametableY * 0x800
                     local tileID, attributeValue = calculateTileAndAttributeAddresses(
-                        tileXIndex, tileYIndex, localNamespace)
+                        tileXIndex, tileYIndex, localNamespace, renderMirror)
                     local tileAddr = backgroundTable * 0x1000 + tileID * 16 + fineY
                     local tile_lsb, tile_msb = tileSet[tileAddr], tileSet[tileAddr + 8]
                     if tile_lsb == nil then return end
@@ -209,7 +273,10 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
             end
             scanLine = scanLine + 1
         end
-        screenY = screenY + 1
+        -- With both BG and sprites disabled, rendering does not advance v.
+        if state.isDrawScreen ~= false or state.isDrawSprites ~= false then
+            sourceRow = sourceRow + 1
+        end
     end
 end
 
@@ -268,7 +335,7 @@ end
 
 --# Draw Sprites Helper
 local function processSprite(ptrScreenBuffer, spriteIndex, spriteHeight, use8x16Sprites)
-    local states = loopy.ppuStates
+    local states = getRenderStates()
     if not states[1] then
         return
     end
@@ -506,24 +573,49 @@ function PPUtoLove2d.GameWindow()
             love.graphics.print(i, 10,loopy.ppuStates[i].scanLine*2-2+screenY)
         end
 
+        local selected = loopy.ppuStates[selectedState]
         local i = #loopy.ppuStates
         --print("State Looked at "..i .. " of " .. #loopy.ppuStates)
         --print("namespace X " .. loopy.ppuStates[i].namespace_x .." ".. loopy.ppuStates[i].offset_x .." ".. loopy.ppuStates[i].fineOffset_x .. " Y " .. loopy.ppuStates[i].namespace_y .." ".. loopy.ppuStates[i].offset_y .." ".. loopy.ppuStates[i].fineOffset_y .. " mirror ".. 
           --  loopy.ppuStates[i].mirror )
             local x = 1
             local y = 0
-            if selectedState < #loopy.ppuStates then
-                x = loopy.ppuStates[selectedState].namespace_x* 256 + loopy.ppuStates[selectedState].offset_x * 8 + loopy.ppuStates[selectedState].fineOffset_x
-                y = loopy.ppuStates[selectedState].namespace_y* 240 + loopy.ppuStates[selectedState].offset_y * 8 + loopy.ppuStates[selectedState].offsetY + loopy.ppuStates[selectedState].fineOffset_y
+            if selected then
+                x = selected.namespace_x * 256 + selected.offset_x * 8 + selected.fineOffset_x
+                y = selected.namespace_y * 240 + selected.offset_y * 8 + selected.offsetY + selected.fineOffset_y
             end
             love.graphics.setColor(.5, 1, .8, .4)
-            local x1 = 1000
+            -- Nametable images begin at x=1010 (the grid origin is x=1000
+            -- plus the 10-pixel label margin). Keep the scroll viewport
+            -- aligned with the actual background drawing.
+            local x1 = 1010
             local y2 = 100
             if x1 + x + 256 > x1+512 then
                 love.graphics.rectangle("fill",x1 + x,y2 + y,512-x,240)
                 love.graphics.rectangle("fill",x1, y2+y,x-256,240)
             else
                 love.graphics.rectangle("fill",x1 + x,y2 + y,256,240)
+            end
+
+            -- Mark the exact scanline being inspected inside the translucent
+            -- scroll viewport. The line wraps with the 2x2 nametable layout.
+            if selected then
+                -- The viewport is the 240-line source window. Mark the
+                -- output scanline within that window so changing INSPECT
+                -- from SL16 to SL36 visibly moves the guide. The renderer's
+                -- source reset remains independent from this visual guide.
+                local lineY = (y + (selected.scanLine or 0)) % 480
+                local lineX = x % 512
+                love.graphics.setColor(1.0, 0.95, 0.25, 0.95)
+                if lineX + 256 > 512 then
+                    love.graphics.line(x1 + lineX, y2 + lineY, x1 + 512, y2 + lineY)
+                    love.graphics.line(x1, y2 + lineY, x1 + lineX - 256, y2 + lineY)
+                else
+                    love.graphics.line(x1 + lineX, y2 + lineY, x1 + lineX + 256, y2 + lineY)
+                end
+                love.graphics.setColor(1.0, 1.0, 0.7, 1)
+                love.graphics.print(string.format("DRAW SL:%d", selected.scanLine or 0),
+                    x1 + lineX + 4, math.max(y2, y2 + lineY - 14))
             end
     end
 end

@@ -36,6 +36,7 @@ local MAX_CATCHUP_FRAMES = 4
 local lastDebugPPURefresh = 0
 
 local function RunEmulatedFrame()
+    loveSpeed.RecordCounter("emulatedFrames", 1)
     if Profile then profile.start() end
     local apuStart = love.timer.getTime()
     apu.TimerCheck(NTSC_FRAME_TIME)
@@ -133,12 +134,15 @@ function DebugDraw()
         local now = love.timer.getTime()
         if testing.GetActiveTab() == "ppu" then
             if now - lastDebugPPURefresh >= 0.1 then
+                local debugPPUStart = love.timer.getTime()
                 ppu.UpdateCharacterTiles()
+                loveSpeed.RecordComponent("ppuDebug", love.timer.getTime() - debugPPUStart)
                 lastDebugPPURefresh = now
             end
             -- Draw the last completed diagnostic images every frame so the
             -- panel persists between limited-rate refreshes.
             ppu.DrawCharacterTiles()
+            testing.DrawPPUDiagnostics()
         end
     end
 end
@@ -214,6 +218,7 @@ function Initialize (file)
     -- Reset clears the prior title's overrides; apply those for the new title.
     ppu.sprite0Offset = Sprite0Scanline:CheckForSprite0Hit(file) or 0
     ppu.scanLineOffset = Sprite0Scanline:CheckForScanLineOffset(file) or 0
+    ppu.backgroundEnableOffset = Sprite0Scanline:CheckForBackgroundEnableOffset(file) or 0
     emulationTime = 0
     apu.Initialize()
     cpu.Initialize()
@@ -235,5 +240,3 @@ end
 --* test
 --TODO Test
 -- test 
-
-

@@ -40,6 +40,7 @@ end
 
 function mapper.PPUWrite(addr, value)
     mapper.CHRRAM[addr] = value
+    mapper.chrDirty = true
 end
 
 function mapper.GetSaveState()

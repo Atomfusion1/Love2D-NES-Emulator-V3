@@ -14,6 +14,10 @@ local displayTimer  = require("Includes.displaytimer")
 local cpu         = {}
 local rshift, band, bor = bit.rshift, bit.band, bit.bor
 local CPURead = bus.CPURead
+local APUClock = apu.Clock
+local CheckIRQ = bus.CheckIRQ
+local TakeOAMDMARequest = bus.TakeOAMDMARequest
+local RefreshOAM = OAM.RefreshOAM
 local debugCPU = false
 cpu.drawFrame = false
 cpu.totalCycles = 4
@@ -139,6 +143,10 @@ function cpu.ExecuteCycles(totalCycles)
     -- Localize hot-path functions to avoid table lookups
     local PPUUpdate = ppu.Update
     local ExecuteOpcode = opcodeTable.Execute
+    local detailEnabled = PerformanceDetailEnabled
+    local ppuTimingCalls = 0
+    local ppuTimingSamples = 0
+    local ppuTimingElapsed = 0
 
     while totalCycles > cycleCount do
         -- Reset PPU with CPU
@@ -153,14 +161,14 @@ function cpu.ExecuteCycles(totalCycles)
         local interruptCycles = 0
         if cpuInternal.TriggerNMI then
             interruptCycles = cpu.DoNMI()
-        elseif (cpuInternal.TriggerIRQ or bus.CheckIRQ()) and band(cpuInternal.statusRegister, 0x04) == 0 then
+        elseif (cpuInternal.TriggerIRQ or CheckIRQ()) and band(cpuInternal.statusRegister, 0x04) == 0 then
             cpuInternal.TriggerIRQ = false
             interruptCycles = cpu.DoIRQ()
         end
         
         -- If an interrupt was handled, add its cycles and skip normal opcode fetch
         if interruptCycles > 0 then
-            apu.Clock(interruptCycles)
+            APUClock(interruptCycles)
             cycleCount = cycleCount + interruptCycles
             cpu.totalCycles = cpu.totalCycles + interruptCycles
             ppuCycleDebt = ppuCycleDebt + interruptCycles
@@ -193,7 +201,7 @@ function cpu.ExecuteCycles(totalCycles)
             -- Update cycle count and debug information
             cycleCount = cycleCount + cycleCost
             cpu.totalCycles = cpu.totalCycles + cycleCost
-            apu.Clock(cycleCost)
+            APUClock(cycleCost)
             ppuCycleDebt = ppuCycleDebt + cycleCost
             
             if addressMode.debugPrint then
@@ -202,13 +210,17 @@ function cpu.ExecuteCycles(totalCycles)
 
             -- Batch PPU updates with threshold of 16 cycles
             if ppuCycleDebt >= 1 then
-                local ppuEmuStart = PerformanceDetailEnabled and love.timer.getTime() or 0
-                if not PPUUpdate(ppuCycleDebt) then
+                ppuTimingCalls = ppuTimingCalls + 1
+                local sampleThisCall = detailEnabled and band(ppuTimingCalls, 0x7F) == 1
+                local ppuEmuStart = sampleThisCall and love.timer.getTime() or 0
+                local ppuContinues = PPUUpdate(ppuCycleDebt)
+                if sampleThisCall then
+                    ppuTimingElapsed = ppuTimingElapsed + love.timer.getTime() - ppuEmuStart
+                    ppuTimingSamples = ppuTimingSamples + 1
+                end
+                if not ppuContinues then
                     cpu.drawFrame = true
                     totalCycles = 0
-                end
-                if PerformanceDetailEnabled then
-                    displayTimer.RecordComponent("ppuEmu", love.timer.getTime() - ppuEmuStart)
                 end
                 ppuCycleDebt = 0
             end
@@ -216,16 +228,16 @@ function cpu.ExecuteCycles(totalCycles)
             -- OAM DMA starts after the instruction that wrote $4014. The
             -- transfer itself is batched for this instruction-level CPU;
             -- its CPU time and the shared APU/PPU clocks are still charged.
-            local dmaRequest = bus.TakeOAMDMARequest()
+            local dmaRequest = TakeOAMDMARequest()
             if dmaRequest then
-                OAM.RefreshOAM(dmaRequest.page, dmaRequest.oamAddress, CPURead)
+                RefreshOAM(dmaRequest.page, dmaRequest.oamAddress, CPURead)
 
                 -- DMA takes 513 cycles when it begins on an odd CPU cycle
                 -- and one additional alignment cycle when it begins even.
                 local dmaCycles = (band(cpu.totalCycles, 1) == 0) and 514 or 513
                 cycleCount = cycleCount + dmaCycles
                 cpu.totalCycles = cpu.totalCycles + dmaCycles
-                apu.Clock(dmaCycles)
+                APUClock(dmaCycles)
                 ppuCycleDebt = ppuCycleDebt + dmaCycles
 
                 if ppuCycleDebt >= 1 then
@@ -238,7 +250,11 @@ function cpu.ExecuteCycles(totalCycles)
             end
         end
     end
-    
+
+    if detailEnabled and ppuTimingSamples > 0 then
+        local estimatedPPUTime = ppuTimingElapsed * ppuTimingCalls / ppuTimingSamples
+        displayTimer.RecordComponent("ppuEmu", estimatedPPUTime)
+    end
 
 end
     

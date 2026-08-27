@@ -3,6 +3,7 @@
 
 local loopy = {}
 loopy.ppuStates = {}
+loopy.ppuStatesVersion = 0
 -- Canonical NES PPU scrolling registers.
 -- v: current VRAM/rendering address, t: temporary address,
 -- x: fine X scroll, w: shared $2005/$2006 write toggle.
@@ -194,26 +195,58 @@ syncLegacyFields()
 
 -- Updated function to search through ppuStates for a matching scanLine number
 function loopy:SearchPPUStatesInRangeAndReplace(startScanLine, endScanLine, state)
+    local firstMatch = nil
+    local mapperEvent = state.trigger == "mapper" or state.mapperEvent
+    local mapperMerged = false
     for i = 1, #self.ppuStates do
         if self.ppuStates[i].scanLine >= startScanLine and self.ppuStates[i].scanLine <= endScanLine then
-            -- Several register/mapper writes commonly form one split.  Preserve
-            -- a completed $2006 split when a later write updates the same state.
-            if self.ppuStates[i].is2006 and not state.is2006 then
-                state.is2006 = true
-                state.offsetY = self.ppuStates[i].offsetY
+            if not firstMatch then
+                firstMatch = i
+                -- Several register/mapper writes commonly form one split.
+                -- Preserve a completed $2006 split when a later write updates
+                -- the same state.
+                if self.ppuStates[i].is2006 and not state.is2006 then
+                    state.is2006 = true
+                    state.offsetY = self.ppuStates[i].offsetY
+                end
+                -- Mapper writes change cartridge data/mirroring, not PPU v/t/x.
+                -- Merge those visual fields into the state already representing
+                -- this scanline instead of creating a second render state.
+                if self.ppuStates[i].mapperEvent and not mapperEvent then
+                    state.mapperEvent = true
+                    state.mapperSpriteTileSet = self.ppuStates[i].spriteTileSet
+                    state.mapperMirror = self.ppuStates[i].mirror
+                elseif mapperEvent then
+                    self.ppuStates[i].mapperEvent = true
+                    self.ppuStates[i].mapperSpriteTileSet = state.spriteTileSet
+                    self.ppuStates[i].mapperMirror = state.mirror
+                    mapperMerged = true
+                end
+            else
+                -- Collapse any additional same-range state from this event batch.
+                table.remove(self.ppuStates, i)
             end
-            self.ppuStates[i] = state
+        end
+    end
+    if firstMatch then
+        if mapperMerged then
+            self.ppuStatesVersion = self.ppuStatesVersion + 1
             return true
         end
+        self.ppuStates[firstMatch] = state
+        self.ppuStatesVersion = self.ppuStatesVersion + 1
+        return true
     end
     -- Insert in scanline order
     for i = 1, #self.ppuStates do
         if self.ppuStates[i].scanLine > state.scanLine then
             table.insert(self.ppuStates, i, state)
+            self.ppuStatesVersion = self.ppuStatesVersion + 1
             return false
         end
     end
     table.insert(self.ppuStates, state)
+    self.ppuStatesVersion = self.ppuStatesVersion + 1
     return false
 end
 

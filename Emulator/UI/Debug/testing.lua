@@ -5,6 +5,7 @@ local ppuBus      = require("NES.PPU.ppuBus")
 local opcode      = require("NES.CPU.opcodes.opcodeTable")
 local memory      = require("NES.CPU.cpuram")
 local ppu         = require("NES.PPU.ppu")
+local ppuIO       = require("NES.PPU.ppuIO")
 local nameTable  = require("NES.PPU.ppunametable")
 local paletteRGB = require("NES.PPU.VGA_Pallette").Pallette
 local displayTimer = require("Includes.displaytimer")
@@ -17,6 +18,8 @@ local holdingString = {}
 local activeTab = "overview"
 DebugActiveTab = activeTab
 local ppuLayerRects = {}
+local ppuDiagnosticRects = {}
+local ppuDiagnosticMode = "live"
 local tabOrder = { "overview", "cpu", "ppu", "memory", "performance", "apu" }
 local tabLabels = {
     overview = "Overview",
@@ -52,6 +55,7 @@ local showCPUKeys = true
 local showPPUKeys = true
 local showSaveLoadKeys = true
 local showOtherKeys = true
+local drawButton
 
 local screenYOffset = 45  -- Leave room for the debugger toolbar
 local Y = 15
@@ -228,6 +232,108 @@ local function drawPanel(x, y, width, height, r, g, b, a)
     love.graphics.rectangle("line", x, y, width, height)
 end
 
+local diagLabelColor = { 0.45, 0.8, 1.0, 1 }
+local diagValueColor = { 1.0, 0.92, 0.55, 1 }
+local diagGoodColor = { 0.35, 1.0, 0.55, 1 }
+local diagWarnColor = { 1.0, 0.45, 0.35, 1 }
+
+local function drawDiagnosticLine(x, y, parts)
+    for _, part in ipairs(parts) do
+        love.graphics.setColor(unpack(part[2] or diagValueColor))
+        love.graphics.print(part[1], x, y)
+        x = x + love.graphics.getFont():getWidth(part[1])
+    end
+end
+
+local function drawPPUDiagnostics(x, y)
+    local v = loopy.v or 0
+    local t = loopy.t or 0
+    local busState = ppuBus.GetDebugBusState()
+    local status = ppuIO.STATUS or 0
+    local ctrl = ppuIO.CTRL or 0
+    local mask = ppuIO.MASKS or 0
+
+    local function line(parts)
+        drawDiagnosticLine(x, y, parts)
+        y = y + 15
+    end
+
+    love.graphics.setColor(0.35, 1.0, 0.65, 1)
+    love.graphics.print("LIVE PPU DIAGNOSTICS", x, y)
+    y = y + 17
+    love.graphics.setColor(0.78, 0.9, 1.0, 1)
+    line({ {"Frame:", diagLabelColor}, {string.format("%d  ", ppu.currentFrame or 0)}, {"Scanline:", diagLabelColor}, {string.format("%d  ", ppu.scanLines or 0)}, {"Dot:", diagLabelColor}, {string.format("%d  ", ppu.scanLinePixels or 0)}, {"Inspect target:", diagLabelColor}, {string.format("%d", ppu.GetDebugInspectionScanline())} })
+    line({ {"VBlank:", diagLabelColor}, {bit.band(status, 0x80) ~= 0 and "ON  " or "OFF  ", bit.band(status, 0x80) ~= 0 and diagGoodColor or diagWarnColor}, {"NMI:", diagLabelColor}, {ppuIO.NMIArmed and "ARMED" or "OFF", ppuIO.NMIArmed and diagGoodColor or diagWarnColor} })
+    line({ {"CTRL:", diagLabelColor}, {string.format("$%02X  ", ctrl)}, {"NT:", diagLabelColor}, {string.format("%d  ", bit.band(ctrl, 3))}, {"Inc:", diagLabelColor}, {string.format("%d  ", bit.band(ctrl, 4) ~= 0 and 32 or 1)}, {"BGpt:", diagLabelColor}, {string.format("$%04X  ", bit.band(ctrl, 0x10) ~= 0 and 0x1000 or 0)}, {"SPRpt:", diagLabelColor}, {string.format("$%04X", bit.band(ctrl, 8) ~= 0 and 0x1000 or 0)} })
+    line({ {"MASK:", diagLabelColor}, {string.format("$%02X  ", mask)}, {"BG:", diagLabelColor}, {bit.band(mask, 8) ~= 0 and "ON  " or "OFF  ", bit.band(mask, 8) ~= 0 and diagGoodColor or diagWarnColor}, {"Spr:", diagLabelColor}, {bit.band(mask, 16) ~= 0 and "ON  " or "OFF  ", bit.band(mask, 16) ~= 0 and diagGoodColor or diagWarnColor}, {"STATUS:", diagLabelColor}, {string.format("$%02X", status)} })
+    line({ {"Flags V:", diagLabelColor}, {bit.band(status, 128) ~= 0 and "1  " or "0  "}, {"S0:", diagLabelColor}, {bit.band(status, 64) ~= 0 and "1  " or "0  "}, {"OF:", diagLabelColor}, {bit.band(status, 32) ~= 0 and "1  " or "0  "}, {"OAM:", diagLabelColor}, {string.format("$%02X", ppuIO.OAMADDR or 0)} })
+    line({ {"v:", diagLabelColor}, {string.format("$%04X  ", v)}, {"CX:", diagLabelColor}, {string.format("%d  ", bit.band(v, 31))}, {"CY:", diagLabelColor}, {string.format("%d  ", bit.rshift(bit.band(v, 0x03E0), 5))}, {"NT:", diagLabelColor}, {string.format("%d,%d  ", bit.rshift(bit.band(v, 0x0400), 10), bit.rshift(bit.band(v, 0x0800), 11))}, {"FY:", diagLabelColor}, {string.format("%d", bit.rshift(bit.band(v, 0x7000), 12))} })
+    line({ {"t:", diagLabelColor}, {string.format("$%04X  ", t)}, {"x:", diagLabelColor}, {string.format("%d  ", loopy.x or 0)}, {"w:", diagLabelColor}, {string.format("%d", loopy.w or 0)} })
+    line({ {"BUS latch:", diagLabelColor}, {string.format("$%02X  ", busState.latch or 0)}, {"buf:", diagLabelColor}, {string.format("$%02X  ", busState.dataBuffer or 0)}, {"Last:", diagLabelColor}, {busState.lastWriteAddr and string.format("$200%d=$%02X", busState.lastWriteAddr, busState.lastWriteData or 0) or "----", diagValueColor} })
+    line({ {"VIEW BG:", diagLabelColor}, {ppu.debugShowBackground and "ON  " or "OFF  ", ppu.debugShowBackground and diagGoodColor or diagWarnColor}, {"Spr:", diagLabelColor}, {ppu.debugShowSprites and "ON  " or "OFF  ", ppu.debugShowSprites and diagGoodColor or diagWarnColor}, {"ACTUAL BG:", diagLabelColor}, {bit.band(mask, 8) ~= 0 and "ON  " or "OFF  ", bit.band(mask, 8) ~= 0 and diagGoodColor or diagWarnColor}, {"Spr:", diagLabelColor}, {bit.band(mask, 16) ~= 0 and "ON" or "OFF", bit.band(mask, 16) ~= 0 and diagGoodColor or diagWarnColor} })
+end
+
+local function drawSavedPPUDiagnostics(x, y, state)
+    if not state then return end
+    local v = state.v or state.ppuAddress or 0
+    local t = state.t or 0
+    local mask = state.mask or 0
+
+    local function line(parts)
+        drawDiagnosticLine(x, y, parts)
+        y = y + 15
+    end
+
+    love.graphics.setColor(1.0, 0.7, 0.3, 1)
+    love.graphics.print("SAVED PPU SNAPSHOT", x, y)
+    y = y + 17
+    love.graphics.setColor(1.0, 0.88, 0.68, 1)
+    line({ {"State:", diagLabelColor}, {string.format("%d/%d  ", selectedState or 0, #loopy.ppuStates)}, {"Scanline:", diagLabelColor}, {string.format("%d  ", state.scanLine or 0)}, {"Trigger:", diagLabelColor}, {state.trigger or "unknown"} })
+    line({ {"v:", diagLabelColor}, {string.format("$%04X  ", v)}, {"CX:", diagLabelColor}, {string.format("%d  ", bit.band(v, 0x1F))}, {"CY:", diagLabelColor}, {string.format("%d  ", bit.rshift(bit.band(v, 0x03E0), 5))}, {"NT:", diagLabelColor}, {string.format("%d,%d  ", bit.rshift(bit.band(v, 0x0400), 10), bit.rshift(bit.band(v, 0x0800), 11))}, {"FY:", diagLabelColor}, {string.format("%d", bit.rshift(bit.band(v, 0x7000), 12))} })
+    line({ {"t:", diagLabelColor}, {string.format("$%04X  ", t)}, {"x:", diagLabelColor}, {string.format("%d  ", state.x or state.fineOffset_x or 0)}, {"w:", diagLabelColor}, {"snapshot unavailable"} })
+    line({ {"MASK:", diagLabelColor}, {string.format("$%02X  ", mask)}, {"BG:", diagLabelColor}, {bit.band(mask, 8) ~= 0 and "ON  " or "OFF  ", bit.band(mask, 8) ~= 0 and diagGoodColor or diagWarnColor}, {"Spr:", diagLabelColor}, {bit.band(mask, 16) ~= 0 and "ON  " or "OFF  ", bit.band(mask, 16) ~= 0 and diagGoodColor or diagWarnColor}, {"Mirror:", diagLabelColor}, {string.format("%d", state.mirror or 0)} })
+    line({ {"Tables BG:", diagLabelColor}, {string.format("$%04X  ", state.backgroundTable == 1 and 0x1000 or 0x0000)}, {"Spr:", diagLabelColor}, {string.format("$%04X  ", state.spriteTable == 1 and 0x1000 or 0x0000)}, {"NT:", diagLabelColor}, {string.format("%d,%d", state.namespace_x or 0, state.namespace_y or 0)} })
+    line({ {"Scroll coarse:", diagLabelColor}, {string.format("%d,%d  ", state.offset_x or 0, state.offset_y or 0)}, {"fine:", diagLabelColor}, {string.format("%d,%d", state.fineOffset_x or 0, state.fineOffset_y or 0)} })
+    line({ {"Render BG:", diagLabelColor}, {state.isDrawScreen and "ON  " or "OFF  ", state.isDrawScreen and diagGoodColor or diagWarnColor}, {"Spr:", diagLabelColor}, {state.isDrawSprites and "ON" or "OFF", state.isDrawSprites and diagGoodColor or diagWarnColor} })
+end
+
+function testing.DrawPPUDiagnostics()
+    -- Draw after the CHR/nametable images so the diagnostics remain visible.
+    love.graphics.setColor(0.03, 0.08, 0.11, 0.96)
+    love.graphics.rectangle("fill", 590, 100, 410, 175)
+    love.graphics.setColor(0.25, 0.75, 0.85, 1)
+    love.graphics.rectangle("line", 590, 100, 410, 175)
+    if ppuDiagnosticMode == "live" then
+        drawPPUDiagnostics(600, 110)
+    else
+        drawSavedPPUDiagnostics(600, 110, ppu.GetDebugInspectionState() or loopy.ppuStates[selectedState])
+    end
+
+    ppuDiagnosticRects = {
+        { x = 600, y = 280, width = 75, height = 24, action = "live" },
+        { x = 681, y = 280, width = 90, height = 24, action = "inspect" },
+        { x = 777, y = 280, width = 45, height = 24, action = "prev10" },
+        { x = 827, y = 280, width = 45, height = 24, action = "prev1" },
+        { x = 877, y = 280, width = 45, height = 24, action = "next1" },
+        { x = 927, y = 280, width = 48, height = 24, action = "next10" }
+    }
+    drawButton("LIVE", 600, 280, 75, 24, ppuDiagnosticMode == "live")
+    drawButton("INSPECT", 681, 280, 90, 24, ppuDiagnosticMode == "inspect")
+    drawButton("-10", 777, 280, 45, 24, false)
+    drawButton("-1", 827, 280, 45, 24, false)
+    drawButton("+1", 877, 280, 45, 24, false)
+    drawButton("+10", 927, 280, 48, 24, false)
+
+    local selected = ppu.GetDebugInspectionState() or loopy.ppuStates[selectedState]
+    if selected then
+        love.graphics.setColor(0.16, 0.08, 0.03, 0.96)
+        love.graphics.rectangle("fill", 590, 315, 410, 145)
+        love.graphics.setColor(0.85, 0.5, 0.2, 1)
+        love.graphics.rectangle("line", 590, 315, 410, 145)
+        drawSavedPPUDiagnostics(600, 325, selected)
+    end
+end
+
 local function cpuMemoryRegionLabel(address)
     address = bit.band(address or 0, 0xFFFF)
     if address < 0x0800 then return "Fast internal RAM ($0000-$07FF)" end
@@ -238,8 +344,6 @@ local function cpuMemoryRegionLabel(address)
     if address < 0x8000 then return "Cartridge PRG-RAM / battery RAM ($6000-$7FFF)" end
     return "Cartridge PRG-ROM ($8000-$FFFF)"
 end
-
-local drawButton
 
 local function CPUExecutionInsight()
     local pc = cpuMemory.programCounter
@@ -553,6 +657,41 @@ function testing.MousePressed(x, y, button)
         return
     end
     if activeTab == "ppu" then
+        local copyRect = ppu.GetDebugFrameCopyRect()
+        if button == 1 and x >= copyRect.x and x <= copyRect.x + copyRect.width
+            and y >= copyRect.y and y <= copyRect.y + copyRect.height then
+            ppu.CopyDebugFrameData()
+            return
+        end
+        for _, rect in ipairs(ppuDiagnosticRects) do
+            if button == 1 and x >= rect.x and x <= rect.x + rect.width
+                and y >= rect.y and y <= rect.y + rect.height then
+                if rect.action == "live" then
+                    ppuDiagnosticMode = "live"
+                    ppu.SetDebugInspectionEnabled(false)
+                elseif rect.action == "inspect" then
+                    ppuDiagnosticMode = "inspect"
+                    ppu.SetDebugInspectionEnabled(true)
+                elseif rect.action == "prev10" then
+                    ppu.AdjustDebugInspectionScanline(-10)
+                    ppuDiagnosticMode = "inspect"
+                    ppu.SetDebugInspectionEnabled(true)
+                elseif rect.action == "prev1" then
+                    ppu.AdjustDebugInspectionScanline(-1)
+                    ppuDiagnosticMode = "inspect"
+                    ppu.SetDebugInspectionEnabled(true)
+                elseif rect.action == "next1" then
+                    ppu.AdjustDebugInspectionScanline(1)
+                    ppuDiagnosticMode = "inspect"
+                    ppu.SetDebugInspectionEnabled(true)
+                elseif rect.action == "next10" then
+                    ppu.AdjustDebugInspectionScanline(10)
+                    ppuDiagnosticMode = "inspect"
+                    ppu.SetDebugInspectionEnabled(true)
+                end
+                return
+            end
+        end
         for _, rect in ipairs(ppuLayerRects) do
             if x >= rect.x and x <= rect.x + rect.width
                 and y >= rect.y and y <= rect.y + rect.height then
@@ -710,13 +849,13 @@ function testing.DisplayUI()
         elseif activeTab == "ppu" then
             -- CHR panels belong only to the PPU tab.
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.rectangle("line", 600, 185, 128 * 2, 128 * 2)
+            love.graphics.rectangle("line", 10, 560, 128 * 2, 128 * 2)
             love.graphics.setColor(.1, .4, .4, 1)
-            love.graphics.rectangle("fill", 600, 185, 128 * 2, 128 * 2)
+            love.graphics.rectangle("fill", 10, 560, 128 * 2, 128 * 2)
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.rectangle("line", 600, 445, 128 * 2, 128 * 2)
+            love.graphics.rectangle("line", 280, 560, 128 * 2, 128 * 2)
             love.graphics.setColor(.1, .4, .4, 1)
-            love.graphics.rectangle("fill", 600, 445, 128 * 2, 128 * 2)
+            love.graphics.rectangle("fill", 280, 560, 128 * 2, 128 * 2)
         end
 
         if activeTab == "memory" then
@@ -754,8 +893,8 @@ function testing.DisplayUI()
             testing.displayMemoryChunk(function(value) return oam[value] end, 0x00, 540, 225)
         elseif activeTab == "ppu" then
             love.graphics.setColor(0.75, 0.85, 0.95, 1)
-            love.graphics.print("PPU visualizations are refreshed while this tab is active.", 600, 110)
-            love.graphics.print("Use C/V for PPU state and Y or the button for CHR palette.", 600, 130)
+            love.graphics.print("PPU visualizations are refreshed while this tab is active.", 600, 70)
+            love.graphics.print("Use C/V for PPU state and Y or the button for CHR palette.", 600, 88)
             -- Layer controls live beside the nametable/scroll visualization.
             -- They affect only the debugger preview while this tab is active.
             ppuLayerRects = {
@@ -766,11 +905,11 @@ function testing.DisplayUI()
                 1295, 50, 105, 24, ppu.debugShowBackground)
             drawButton("Sprites: " .. (ppu.debugShowSprites and "ON" or "OFF"),
                 1407, 50, 105, 24, ppu.debugShowSprites)
-            paletteCycleRect = { x = 600, y = 150, width = 145, height = 26 }
-            drawButton("Cycle palette (Y)", 600, 150, 145, 26, false)
+            paletteCycleRect = { x = 600, y = 475, width = 145, height = 26 }
+            drawButton("Cycle palette (Y)", 600, 475, 145, 26, false)
             local paletteBase = (G_ColorOffset % 8) * 4
             love.graphics.setColor(0.75, 0.85, 0.95, 1)
-            love.graphics.print(string.format("CHR palette %d", G_ColorOffset), 760, 155)
+            love.graphics.print(string.format("CHR palette %d", G_ColorOffset), 760, 480)
             for i = 0, 3 do
                 local paletteAddress = (i == 0) and 0 or ((paletteBase + i) % 0x20)
                 local value = nameTable.tblPalette[paletteAddress] or 0
@@ -778,9 +917,9 @@ function testing.DisplayUI()
                 local rgb = paletteRGB[value] or paletteRGB[0]
                 local swatchX = 880 + i * 30
                 love.graphics.setColor(rgb[1] / 255, rgb[2] / 255, rgb[3] / 255, 1)
-                love.graphics.rectangle("fill", swatchX, 150, 24, 24)
+                love.graphics.rectangle("fill", swatchX, 475, 24, 24)
                 love.graphics.setColor(1, 1, 1, 1)
-                love.graphics.rectangle("line", swatchX, 150, 24, 24)
+                love.graphics.rectangle("line", swatchX, 475, 24, 24)
             end
         elseif activeTab == "apu" then
             love.graphics.setColor(0.75, 0.85, 0.95, 1)
@@ -831,6 +970,15 @@ function testing.DisplayUI()
             love.graphics.print(string.format("1%% low: %.1f FPS", stats.onePercentLow > 0 and 1 / stats.onePercentLow or 0), 600, 205)
             love.graphics.print(string.format("FPS: %.2f", stats.fps), 800, 145)
             love.graphics.print(string.format("Lua memory: %.2f MB", stats.memoryMB), 800, 165)
+            love.graphics.print(string.format("Memory delta: %+.1f KB", stats.memoryDeltaKB or 0), 800, 185)
+            local chrCopyValues = stats.counters.ppuChrCopies or {}
+            local chrTimeValues = stats.components.ppuChrSnapshot or {}
+            local emulatedFrameValues = stats.counters.emulatedFrames or {}
+            love.graphics.print(string.format("NES frames: %d   CHR copies: %d (%.3f ms)   GC drop: %.1f KB",
+                emulatedFrameValues[#emulatedFrameValues] or 0,
+                chrCopyValues[#chrCopyValues] or 0,
+                (chrTimeValues[#chrTimeValues] or 0) * 1000,
+                stats.memoryDropKB or 0), 800, 205)
             performanceRects = {
                 { x = 600, y = 225, width = 130, height = 26, action = "reset" },
                 { x = 745, y = 225, width = 105, height = 26, action = "overall" },
@@ -849,10 +997,11 @@ function testing.DisplayUI()
             local graphX, graphY, graphW, graphH = 600, 285, 560, 220
             local graphValues = stats.samples
             if performanceFocus == "cpu" then graphValues = stats.components.cpuCore end
-            if performanceFocus == "ppu" then graphValues = stats.components.ppuSetup end
+            if performanceFocus == "ppu" then graphValues = stats.components.ppu end
             local focusedPeak = 0
             for _, value in ipairs(graphValues) do focusedPeak = math.max(focusedPeak, value) end
-            local graphMaxMs = math.max(focusedPeak * 1000, 16.67)
+            local minimumScaleMs = performanceFocus == "overall" and 16.67 or 4.0
+            local graphMaxMs = math.max(focusedPeak * 1100, minimumScaleMs)
             love.graphics.setColor(0.04, 0.07, 0.1, 1)
             love.graphics.rectangle("fill", graphX, graphY, graphW, graphH)
             love.graphics.setColor(0.3, 0.5, 0.65, 1)
@@ -865,8 +1014,6 @@ function testing.DisplayUI()
             love.graphics.print(string.format("%.1f ms", graphMaxMs), graphX - 58, graphY - 6)
             love.graphics.print(string.format("%.1f ms", graphMaxMs / 2), graphX - 58, graphY + graphH / 2 - 7)
             love.graphics.print("0 ms", graphX - 38, graphY + graphH - 7)
-            love.graphics.print("older / compressed", graphX, graphY + graphH + 28)
-            love.graphics.print("newest", graphX + graphW - 48, graphY + graphH + 28)
             local count = #graphValues
             if count > 1 then
                 local maxValue = graphMaxMs / 1000
@@ -889,7 +1036,9 @@ function testing.DisplayUI()
                         { label = "Setup", values = stats.components.ppuSetup, color = { 0.4, 0.8, 1, 1 } },
                         { label = "Background", values = stats.components.ppuBackground, color = { 0.4, 1, 0.5, 1 } },
                         { label = "Sprites", values = stats.components.ppuSprites, color = { 1, 0.65, 0.3, 1 } },
-                        { label = "Upload", values = stats.components.ppuUpload, color = { 1, 0.4, 0.6, 1 } }
+                        { label = "Upload", values = stats.components.ppuUpload, color = { 1, 0.4, 0.6, 1 } },
+                        { label = "CHR copy", values = stats.components.ppuChrSnapshot, color = { 0.95, 0.85, 0.25, 1 } },
+                        { label = "Debug", values = stats.components.ppuDebug, color = { 0.65, 0.45, 1, 1 } }
                     }
                 end
                 for _, item in ipairs(series) do
@@ -903,6 +1052,18 @@ function testing.DisplayUI()
                         local py = graphY + graphH - normalized * graphH
                         if previousX then love.graphics.line(previousX, previousY, px, py) end
                         previousX, previousY = px, py
+                    end
+                end
+
+                -- CHR snapshot events are marked independently of the selected
+                -- timing series so their exact frame alignment remains visible.
+                love.graphics.setColor(0.95, 0.85, 0.25, 1)
+                for i, copies in ipairs(chrCopyValues) do
+                    if copies > 0 then
+                        local age = count - i
+                        local agePosition = logSpan > 0 and math.log(1 + age * compressionScale) / logSpan or 0
+                        local px = graphX + (1 - agePosition) * graphW
+                        love.graphics.line(px, graphY + graphH - 10, px, graphY + graphH)
                     end
                 end
             end
@@ -923,17 +1084,60 @@ function testing.DisplayUI()
                     { label = "Setup", color = { 0.4, 0.8, 1, 1 } },
                     { label = "Background", color = { 0.4, 1, 0.5, 1 } },
                     { label = "Sprites", color = { 1, 0.65, 0.3, 1 } },
-                    { label = "Upload", color = { 1, 0.4, 0.6, 1 } }
+                    { label = "Upload", color = { 1, 0.4, 0.6, 1 } },
+                    { label = "CHR copy", color = { 0.95, 0.85, 0.25, 1 } },
+                    { label = "Debug", color = { 0.65, 0.45, 1, 1 } }
                 }
+            end
+            local legendStep = 95
+            if performanceFocus == "ppu" then
+                legendX = graphX + 135
+                legendStep = 70
             end
             for _, item in ipairs(legend) do
                 love.graphics.setColor(unpack(item.color))
                 love.graphics.print("● " .. item.label, legendX, graphY + 5)
-                legendX = legendX + 95
+                legendX = legendX + legendStep
             end
             love.graphics.setColor(0.65, 0.75, 0.85, 1)
             love.graphics.print("Time axis: recent expanded -> older compressed (600 frames)", graphX + 10, graphY + graphH + 8)
-            love.graphics.print("Use K to toggle the sampling profiler.", 600, 555)
+            love.graphics.setColor(0.95, 0.85, 0.25, 1)
+            love.graphics.print("Yellow bottom ticks = frames containing CHR snapshots", 600, 533)
+
+            local slowest = {}
+            local cpuValues = stats.components.cpuCore or {}
+            for i, value in ipairs(cpuValues) do slowest[#slowest + 1] = { index = i, value = value } end
+            table.sort(slowest, function(a, b) return a.value > b.value end)
+            love.graphics.setColor(0.7, 0.85, 1, 1)
+            love.graphics.print("SLOWEST RECENT FRAMES (retained automatically)", 600, 555)
+            for rank = 1, math.min(4, #slowest) do
+                local item = slowest[rank]
+                local i = item.index
+                local age = #cpuValues - i
+                local ppuEmu = (stats.components.ppuEmu or {})[i] or 0
+                local copies = chrCopyValues[i] or 0
+                local chrMs = (chrTimeValues[i] or 0) * 1000
+                local memoryDelta = (stats.memoryDeltas or {})[i] or 0
+                local gcDrop = (stats.memoryDrops or {})[i] or 0
+                local ppuDraw = (stats.components.ppu or {})[i] or 0
+                local background = (stats.components.ppuBackground or {})[i] or 0
+                local sprites = (stats.components.ppuSprites or {})[i] or 0
+                local upload = (stats.components.ppuUpload or {})[i] or 0
+                local states = ((stats.counters or {}).ppuStateCount or {})[i] or 0
+                local emulatedFrames = math.max(1, emulatedFrameValues[i] or 0)
+                local cpuPerFrame = item.value * 1000 / emulatedFrames
+                local drawPerFrame = ppuDraw * 1000 / emulatedFrames
+                love.graphics.setColor(copies > 0 and 1 or 0.8, copies > 0 and 0.85 or 0.8, copies > 0 and 0.3 or 0.8, 1)
+                love.graphics.print(string.format(
+                    "%d) age:%df NES:%d CPU:%.2f(%.2f/f) PPUemu:%.2f draw:%.2f(%.2f/f) BG:%.2f Spr:%.2f Up:%.2f states:%d CHR:%d/%.3f mem:%+.0f GC:%.0f",
+                    rank, age, emulatedFrames, item.value * 1000, cpuPerFrame,
+                    ppuEmu * 1000, ppuDraw * 1000, drawPerFrame,
+                    background * 1000, sprites * 1000, upload * 1000,
+                    states, copies, chrMs, memoryDelta, gcDrop),
+                    600, 555 + rank * 19)
+            end
+            love.graphics.setColor(0.65, 0.75, 0.85, 1)
+            love.graphics.print("Reset Stats clears retained frames. K toggles sampling profiler.", 600, 650)
         end
     end
 end

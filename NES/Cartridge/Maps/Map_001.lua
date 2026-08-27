@@ -476,6 +476,7 @@ function mapper.PPUWrite(addr, value)
     if addr < 0x2000 then
         if cart.header[0x05] == 0 then
             mapper.chrRAM[addr] = value
+            mapper.chrDirty = true
             return true
         end
         return true

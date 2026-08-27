@@ -98,10 +98,14 @@ function mapper.CPUWrite(addr, data)
     elseif addr >= 0x8000 and addr < 0xA000 then
         local value = bit.band(addr,0x0001)
         if value == 0 then
-            prgBankMode = bit.rshift(bit.band(data,0x40),6)
-            chrBankMode = bit.rshift(bit.band(data,0x80),7)
+            local newPrgBankMode = bit.rshift(bit.band(data,0x40),6)
+            local newChrBankMode = bit.rshift(bit.band(data,0x80),7)
+            if newChrBankMode ~= chrBankMode then
+                mapper.chrDirty = true
+            end
+            prgBankMode = newPrgBankMode
+            chrBankMode = newChrBankMode
             bankSelect = bit.band(data,0x07)
-            mapper.chrDirty = true
             
             -- Capture PPU state at this scanline for mid-frame CHR mode changes
             if loopy.scanLine < 240 and loopy:SearchPPUStatesInRange(loopy.scanLine - 1, loopy.scanLine + 1) then
@@ -113,25 +117,27 @@ function mapper.CPUWrite(addr, data)
             end
         else
             if bankSelect == 0 then
-                CHRBank0a = bit.band(data,0xFFFE)
-                CHRBank0b = bit.band(data,0xFFFE) + 1
-                mapper.chrDirty = true
+                local newBank = bit.band(data,0xFFFE)
+                if newBank ~= CHRBank0a then mapper.chrDirty = true end
+                CHRBank0a = newBank
+                CHRBank0b = newBank + 1
             elseif bankSelect == 1 then
-                CHRBank1a = bit.band(data,0xFFFE)
-                CHRBank1b = bit.band(data,0xFFFE) + 1
-                mapper.chrDirty = true
+                local newBank = bit.band(data,0xFFFE)
+                if newBank ~= CHRBank1a then mapper.chrDirty = true end
+                CHRBank1a = newBank
+                CHRBank1b = newBank + 1
             elseif bankSelect == 2 then
+                if data ~= CHRBank2 then mapper.chrDirty = true end
                 CHRBank2 = data
-                mapper.chrDirty = true
             elseif bankSelect == 3 then
+                if data ~= CHRBank3 then mapper.chrDirty = true end
                 CHRBank3 = data
-                mapper.chrDirty = true
             elseif bankSelect == 4 then
+                if data ~= CHRBank4 then mapper.chrDirty = true end
                 CHRBank4 = data
-                mapper.chrDirty = true
             elseif bankSelect == 5 then
+                if data ~= CHRBank5 then mapper.chrDirty = true end
                 CHRBank5 = data
-                mapper.chrDirty = true
             elseif bankSelect == 6 then
                 PRGBank6 = data
                 --print("prgbank6 "..PRGBank6 )

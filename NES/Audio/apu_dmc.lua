@@ -52,6 +52,7 @@ local function fetchSampleByte()
     sampleBufferEmpty = false
     currentAddress = currentAddress == 0xFFFF and 0x8000 or currentAddress + 1
     bytesRemaining = bytesRemaining - 1
+    if bytesRemaining == 0 and not loop and irqEnable then irqFlag = true end
 end
 
 local function restartSample()
@@ -83,29 +84,30 @@ local function clockOutputUnit()
     if bitsRemaining > 0 then bitsRemaining = bitsRemaining - 1 end
     if bitsRemaining == 0 then
         fetchSampleByte()
-        if bytesRemaining == 0 and sampleBufferEmpty then
-            if loop then restartSample()
-            elseif irqEnable then irqFlag = true end
-        end
+        if bytesRemaining == 0 and sampleBufferEmpty and loop then restartSample() end
     end
 end
 
 function dmc.SetReadCallback(callback) readByte = callback end
 
 function dmc.Clock(cycles)
+    cycles = cycles or 0
     if audioEnabled then
-        sampleAccumulator = sampleAccumulator + (cycles or 0) * SAMPLE_RATE / CPU_RATE
+        sampleAccumulator = sampleAccumulator + cycles * SAMPLE_RATE / CPU_RATE
         while sampleAccumulator >= 1 do
             queueAudioSample(outputLevel)
             sampleAccumulator = sampleAccumulator - 1
         end
     end
-    for _ = 1, (cycles or 0) do
-        timer = timer - 1
-        if timer <= 0 then
-            timer = RATE_TABLE[rateIndex + 1]
-            clockOutputUnit()
-        end
+
+    -- Advancing the countdown arithmetically is cycle-equivalent to
+    -- decrementing it once per CPU cycle, but avoids about 29,781 Lua loop
+    -- iterations per NES frame.
+    timer = timer - cycles
+    local period = RATE_TABLE[rateIndex + 1]
+    while timer <= 0 do
+        timer = timer + period
+        clockOutputUnit()
     end
 end
 
@@ -148,6 +150,8 @@ function dmc.RegisterWrite(addr, data)
 end
 
 function dmc.StatusHandle(data)
+    -- Any write to $4015 clears the DMC interrupt flag.
+    irqFlag = false
     if bit.band(data or 0, 0x10) == 0 then
         bytesRemaining = 0
         sampleBufferEmpty = true
@@ -158,7 +162,7 @@ end
 
 function dmc.StatusBits()
     local value = 0
-    if bytesRemaining > 0 or not sampleBufferEmpty then value = bit.bor(value, 0x10) end
+    if bytesRemaining > 0 then value = bit.bor(value, 0x10) end
     if irqFlag then value = bit.bor(value, 0x80) end
     return value
 end

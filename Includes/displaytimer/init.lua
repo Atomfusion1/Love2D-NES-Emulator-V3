@@ -17,11 +17,19 @@ local maxFUT1 = 0.0
 local maxFUTTime = 0
 local metricsFont = nil
 local frameSamples = {}
-local componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {} }
+local componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {}, ppuChrSnapshot = {}, ppuDebug = {} }
 local pendingComponents = {}
 local lastComponentValues = { cpu = 0, ppu = 0 }
+local eventComponents = { ppuChrSnapshot = true, ppuDebug = true }
+local counterSamples = { ppuChrCopies = {} }
+local pendingCounters = {}
+local memoryDeltaSamples = {}
+local memoryDropSamples = {}
+local frameNumberSamples = {}
+local previousMemoryKB = nil
 local frameSampleIndex = 0
 local frameSampleCount = 0
+local totalFrameSamples = 0
 local FRAME_SAMPLE_LIMIT = 600
 
 --# Start the timer
@@ -54,16 +62,31 @@ function displayTimer.DisplayScreen()
     UpdateRunningAverage(cycleTime)
     UpdateFUT(cycleTime)
     frameSampleIndex = frameSampleIndex % FRAME_SAMPLE_LIMIT + 1
+    totalFrameSamples = totalFrameSamples + 1
+    frameNumberSamples[frameSampleIndex] = totalFrameSamples
     frameSamples[frameSampleIndex] = math.max(0, cycleTime)
     for name, samples in pairs(componentSamples) do
-        if pendingComponents[name] then
+        if eventComponents[name] then
+            samples[frameSampleIndex] = math.max(0, pendingComponents[name] or 0)
+        elseif pendingComponents[name] then
             lastComponentValues[name] = math.max(0, pendingComponents[name])
+            samples[frameSampleIndex] = lastComponentValues[name]
+        else
+            -- A render component may not run on every presentation callback.
+            -- Keep its last measurement instead of drawing a false zero dip.
+            samples[frameSampleIndex] = lastComponentValues[name] or 0
         end
-        -- A render component may not run on every presentation callback. Keep
-        -- its last measured value instead of drawing a false zero-time dip.
-        samples[frameSampleIndex] = lastComponentValues[name] or 0
     end
+    for name, samples in pairs(counterSamples) do
+        samples[frameSampleIndex] = pendingCounters[name] or 0
+    end
+    local memoryKB = collectgarbage("count")
+    local memoryDeltaKB = previousMemoryKB and (memoryKB - previousMemoryKB) or 0
+    memoryDeltaSamples[frameSampleIndex] = memoryDeltaKB
+    memoryDropSamples[frameSampleIndex] = math.max(0, -memoryDeltaKB)
+    previousMemoryKB = memoryKB
     pendingComponents = {}
+    pendingCounters = {}
     frameSampleCount = math.min(frameSampleCount + 1, FRAME_SAMPLE_LIMIT)
     UpdateScreenValues()
     DrawPerformanceMetrics()
@@ -80,14 +103,31 @@ function displayTimer.ResetStats()
     frameSampleIndex = 0
     frameSampleCount = 0
     frameSamples = {}
-    componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {} }
+    componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {}, ppuChrSnapshot = {}, ppuDebug = {} }
     pendingComponents = {}
     lastComponentValues = { cpu = 0, ppu = 0 }
+    counterSamples = { ppuChrCopies = {} }
+    pendingCounters = {}
+    memoryDeltaSamples = {}
+    memoryDropSamples = {}
+    frameNumberSamples = {}
+    previousMemoryKB = nil
+    totalFrameSamples = 0
 end
 
 function displayTimer.RecordComponent(name, elapsed)
     if not componentSamples[name] then componentSamples[name] = {} end
     pendingComponents[name] = (pendingComponents[name] or 0) + elapsed
+end
+
+function displayTimer.RecordCounter(name, amount)
+    if not counterSamples[name] then counterSamples[name] = {} end
+    pendingCounters[name] = (pendingCounters[name] or 0) + (amount or 1)
+end
+
+function displayTimer.RecordGauge(name, value)
+    if not counterSamples[name] then counterSamples[name] = {} end
+    pendingCounters[name] = math.max(pendingCounters[name] or 0, value or 0)
 end
 
 function displayTimer.GetStats()
@@ -112,6 +152,29 @@ function displayTimer.GetStats()
             components[name][i] = source[index] or 0
         end
     end
+    local counters = {}
+    for name, source in pairs(counterSamples) do
+        counters[name] = {}
+        for i = 1, frameSampleCount do
+            local index = (frameSampleIndex - frameSampleCount + i - 1) % FRAME_SAMPLE_LIMIT + 1
+            counters[name][i] = source[index] or 0
+        end
+    end
+    local latestMemoryDeltaKB = 0
+    local latestMemoryDropKB = 0
+    local memoryDeltas = {}
+    local memoryDrops = {}
+    local frameNumbers = {}
+    for i = 1, frameSampleCount do
+        local index = (frameSampleIndex - frameSampleCount + i - 1) % FRAME_SAMPLE_LIMIT + 1
+        memoryDeltas[i] = memoryDeltaSamples[index] or 0
+        memoryDrops[i] = memoryDropSamples[index] or 0
+        frameNumbers[i] = frameNumberSamples[index] or 0
+    end
+    if frameSampleCount > 0 then
+        latestMemoryDeltaKB = memoryDeltaSamples[frameSampleIndex] or 0
+        latestMemoryDropKB = memoryDropSamples[frameSampleIndex] or 0
+    end
     -- Component timings can be captured on a slightly different emulation
     -- callback boundary than the presentation timer. Keep the displayed
     -- overall series as an upper bound so it cannot visually fall below a
@@ -126,8 +189,15 @@ function displayTimer.GetStats()
         onePercentLow = onePercentLow,
         fps = love.timer.getFPS(),
         memoryMB = collectgarbage("count") / 1024,
+        memoryDeltaKB = latestMemoryDeltaKB,
+        memoryDropKB = latestMemoryDropKB,
+        memoryDeltas = memoryDeltas,
+        memoryDrops = memoryDrops,
+        frameNumbers = frameNumbers,
+        totalFrameSamples = totalFrameSamples,
         samples = samples,
-        components = components
+        components = components,
+        counters = counters
     }
 end
 

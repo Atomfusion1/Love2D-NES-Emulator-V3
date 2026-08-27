@@ -53,10 +53,11 @@ local mirrorTable = {
     [3] = {[0]=1, [1]=1, [2]=1, [3]=1}
 }
 
-function nameTable.NameTableMirrorRead(addr)
+function nameTable.NameTableMirrorRead(addr, mirrorMode)
     local maskedAddr = band(addr, 0x0FFF)
     local section = rshift(maskedAddr, 10) -- Divide by 0x400 to get 0-3
-    local tableIndex = mirrorTable[cart.Mirror][section]
+    local mapping = mirrorTable[mirrorMode == nil and cart.Mirror or mirrorMode]
+    local tableIndex = mapping[section]
     return tableName[tableIndex][band(maskedAddr, 0x3FF)]
 end
 

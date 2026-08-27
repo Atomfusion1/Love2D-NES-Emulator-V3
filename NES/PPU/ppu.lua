@@ -22,6 +22,7 @@ ppu.vBlankEnd         = false
 ppu.currentFrame      = 1
 ppu.sprite0Offset     = 0
 ppu.scanLineOffset    = 0
+ppu.backgroundEnableOffset = 0
 
 
 ppu.scroll = {
@@ -51,6 +52,9 @@ ppu.DrawScreen = false
 -- Debugger-only layer visibility. These flags never alter emulation state.
 ppu.debugShowBackground = true
 ppu.debugShowSprites = true
+ppu.debugInspectionScanline = 0
+ppu.debugInspectionEnabled = false
+ppu.debugInspectionState = nil
 
 function ppu.ToggleDebugBackground()
     ppu.debugShowBackground = not ppu.debugShowBackground
@@ -58,6 +62,94 @@ end
 
 function ppu.ToggleDebugSprites()
     ppu.debugShowSprites = not ppu.debugShowSprites
+end
+
+function ppu.AdjustDebugInspectionScanline(delta)
+    local scanline = (ppu.debugInspectionScanline or 0) + (delta or 0)
+    ppu.debugInspectionScanline = math.max(0, math.min(239, scanline))
+    for i = #loopy.ppuStates, 1, -1 do
+        if loopy.ppuStates[i].trigger == "inspect" then
+            table.remove(loopy.ppuStates, i)
+        end
+    end
+    ppu.debugInspectionState = nil
+    return ppu.debugInspectionScanline
+end
+
+function ppu.GetDebugInspectionScanline()
+    return ppu.debugInspectionScanline or 0
+end
+
+function ppu.SetDebugInspectionEnabled(enabled)
+    ppu.debugInspectionEnabled = enabled and true or false
+    if not ppu.debugInspectionEnabled then
+        for i = #loopy.ppuStates, 1, -1 do
+            if loopy.ppuStates[i].trigger == "inspect" then
+                table.remove(loopy.ppuStates, i)
+            end
+        end
+        ppu.debugInspectionState = nil
+    end
+end
+
+function ppu.GetDebugInspectionState()
+    return ppu.debugInspectionState
+end
+
+function ppu.GetDebugScreenChanges()
+    local changes = {}
+    for _, state in ipairs(loopy.ppuStates) do
+        if state.trigger ~= "mapper" then
+            local reason = state.trigger or "unknown"
+            if state.mapperEvent and reason ~= "unknown" then
+                reason = reason .. "+mapper"
+            end
+            changes[#changes + 1] = string.format("SL%d %s", state.scanLine or 0, reason)
+        end
+    end
+    return #changes > 0 and table.concat(changes, " | ") or "none"
+end
+
+function ppu.GetDebugFrameData()
+    local lines = {"PPU FRAME DATA (mapper-only events omitted)"}
+    for _, state in ipairs(loopy.ppuStates) do
+        if state.trigger ~= "mapper" then
+            lines[#lines + 1] = string.format(
+                "SL=%d trigger=%s v=$%04X t=$%04X x=%d coarse=%d,%d fine=%d,%d NT=%d,%d mask=$%02X BG=%s Spr=%s mirror=%d is2006=%s mapper=%s",
+                state.scanLine or 0, state.trigger or "unknown",
+                state.v or state.ppuAddress or 0, state.t or 0, state.x or 0,
+                state.offset_x or 0, state.offset_y or 0,
+                state.fineOffset_x or 0, state.fineOffset_y or 0,
+                state.namespace_x or 0, state.namespace_y or 0,
+                state.mask or 0,
+                state.isDrawScreen == false and "OFF" or "ON",
+                state.isDrawSprites == false and "OFF" or "ON",
+                state.mirror or 0, state.is2006 and "yes" or "no",
+                state.mapperEvent and "yes" or "no")
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
+local debugFrameCopyRect = { x = 1186, y = 640, width = 120, height = 24 }
+function ppu.GetDebugFrameCopyRect()
+    return debugFrameCopyRect
+end
+
+function ppu.CopyDebugFrameData()
+    love.system.setClipboardText(ppu.GetDebugFrameData())
+    ppu.debugFrameCopyStatus = "Frame data copied"
+end
+
+local function replaceDebugInspectionState(state)
+    for i = #loopy.ppuStates, 1, -1 do
+        if loopy.ppuStates[i].trigger == "inspect" then
+            table.remove(loopy.ppuStates, i)
+        end
+    end
+    ppu.debugInspectionState = state
+    table.insert(loopy.ppuStates, state)
+    selectedState = #loopy.ppuStates
 end
 
 -- Loading another cartridge is a complete console power cycle. Reset both the
@@ -68,11 +160,13 @@ function ppu.Reset()
     ppu.scanLines = -1
     ppu.vBlankEnd = false
     ppu.currentFrame = 1
+    ppu.debugInspectionState = nil
     ppu.DrawScreen = false
     ppu.debugShowBackground = true
     ppu.debugShowSprites = true
     ppu.sprite0Offset = 0
     ppu.scanLineOffset = 0
+    ppu.backgroundEnableOffset = 0
     cachedTileSet = nil
 
     vBlankFlag = false
@@ -132,6 +226,10 @@ function ppu.Update(cpuCycles)
             print("---Start PPU courseX" .. loopy.course_x)
         end
         ppu.savePPUStates(0)
+        if ppu.debugInspectionEnabled and EnableDebug and DebugActiveTab == "ppu"
+            and ppu.debugInspectionScanline == 0 then
+            replaceDebugInspectionState(ppu.GetPPUState(0, 0, false, "inspect"))
+        end
     end
 
     -- Enabling NMI during an already-active vblank takes effect at the next
@@ -219,6 +317,11 @@ function ppu.Update(cpuCycles)
             scanLines = scanLines + 1
             if scanLines >= 0 and scanLines <= 239 and loopy.drawScreen then ppuBus.ppuScanLineUpdate(scanLines) end -- 241 lines total
 
+            if ppu.debugInspectionEnabled and EnableDebug and DebugActiveTab == "ppu"
+                and scanLines == ppu.debugInspectionScanline and scanLines > 0 then
+                replaceDebugInspectionState(ppu.GetPPUState(scanLines, 0, false, "inspect"))
+            end
+
             -- Scanline 261 must finish so its scroll transfers can run.
             if scanLines > 261 then
                 ppu.scanLines = -1
@@ -246,14 +349,17 @@ end
 --# clear States
 function ppu.clearPPUStates()
     loopy.ppuStates = {}
-    cachedTileSet = nil
+    ppu.debugInspectionState = nil
 end
 
 local function getCachedTileSet()
     local currentMapper = mapper[cart.mapper].mapper
     if currentMapper.chrDirty or not cachedTileSet then
+        local snapshotStart = love.timer.getTime()
         cachedTileSet = ppuBus.ppuBuffer(0, 0x1FFF)
         currentMapper.chrDirty = false
+        displayTimer.RecordComponent("ppuChrSnapshot", love.timer.getTime() - snapshotStart)
+        displayTimer.RecordCounter("ppuChrCopies", 1)
     end
     return cachedTileSet
 end
@@ -280,7 +386,8 @@ function ppu.GetPPUState(scanLine, offset, is2006, trigger)
         mask                = ppuIO.MASKS,
         offsetY             = offset or 0,
         is2006              = is2006 or false,
-        trigger             = trigger or "unknown"
+        trigger             = trigger or "unknown",
+        mapperEvent         = trigger == "mapper"
     }
     return state
 end
@@ -308,9 +415,11 @@ function ppu.savePPUStates(scanLine, offset, is2006, trigger)
         mask                = ppuIO.MASKS,
         offsetY             = offset or 0,
         is2006              = is2006 or false,
-        trigger             = trigger or "scanline"
+        trigger             = trigger or "scanline",
+        mapperEvent         = trigger == "mapper"
     }
     table.insert(loopy.ppuStates, state)
+    loopy.ppuStatesVersion = (loopy.ppuStatesVersion or 0) + 1
 end
 
 --! MAIN DRAW
@@ -327,7 +436,6 @@ ppu.patternbuffer1 = love.image.newImageData(128, 128, "rgba8")
 ppu.patternScreen1 = love.graphics.newImage(ppu.patternbuffer1)
 
 function ppu.FFIBuffer(ArrayToRender, screenImage, buffer)
-    if collectgarbage("count") > 20000 then collectgarbage() end -- This is BAD I do not want this
     local pointer = require("ffi").cast("uint8_t*", buffer:getFFIPointer())
     local pixelCount = (4 * screenImage:getWidth() * screenImage:getHeight()) - 1
     for i = 0, pixelCount, 4 do
@@ -341,6 +449,7 @@ end
 
 function ppu.StartGameWindow()
     local ppuRenderStart = love.timer.getTime()
+    displayTimer.RecordGauge("ppuStateCount", #loopy.ppuStates)
 --# Draw Background with 3F00 Color 
     local ptrScreenBuffer = require("ffi").cast("uint32_t*", ppu.screenBuffer:getFFIPointer())
     local setupStart = love.timer.getTime()
@@ -392,9 +501,10 @@ local CHR0 = {}
 local CHR1 = {}
 local debugNametable1 = nil
 local debugNametable2 = nil
-local chrDebugX = 600
-local chrDebugY0 = 185
-local chrDebugY1 = 445
+local chrDebugX0 = 10
+local chrDebugX1 = 280
+local chrDebugY0 = 560
+local chrDebugY1 = 560
 local chrDebugScale = 2
 local debugNametableMode = 0 -- 0=native, 1=all nametable A, 2=all nametable B
 
@@ -480,9 +590,9 @@ end
 
 function ppu.DrawCharacterTiles()
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(ppu.patternScreen0, chrDebugX, chrDebugY0, 0, chrDebugScale)
+    love.graphics.draw(ppu.patternScreen0, chrDebugX0, chrDebugY0, 0, chrDebugScale)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(ppu.patternScreen1, chrDebugX, chrDebugY1, 0, chrDebugScale)
+    love.graphics.draw(ppu.patternScreen1, chrDebugX1, chrDebugY1, 0, chrDebugScale)
     -- Draw PPU state selector under nametable debug screens (right side)
     local stateX = 1010
     local stateY = 640
@@ -492,16 +602,26 @@ function ppu.DrawCharacterTiles()
     local itemHeight = 22
     local spacing = 5
     
-    local function stateButton(label, x)
+    local function stateButton(label, x, width)
+        width = width or 80
         love.graphics.setColor(0.08, 0.16, 0.22, 1)
-        love.graphics.rectangle("fill", x, stateY, 80, 24, 3, 3)
+        love.graphics.rectangle("fill", x, stateY, width, 24, 3, 3)
         love.graphics.setColor(0.45, 0.75, 0.9, 1)
-        love.graphics.rectangle("line", x, stateY, 80, 24, 3, 3)
+        love.graphics.rectangle("line", x, stateY, width, 24, 3, 3)
         love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.printf(label, x, stateY + 4, 80, "center")
+        love.graphics.printf(label, x, stateY + 4, width, "center")
     end
     stateButton("C  Prev", stateX)
     stateButton("V  Next", stateX + 88)
+    stateButton("COPY FRAME", debugFrameCopyRect.x, debugFrameCopyRect.width)
+    if ppu.debugFrameCopyStatus then
+        love.graphics.setColor(0.35, 1, 0.55, 1)
+        love.graphics.print(ppu.debugFrameCopyStatus, debugFrameCopyRect.x, debugFrameCopyRect.y + 28)
+    end
+
+    love.graphics.setColor(0.65, 0.85, 0.95, 1)
+    love.graphics.printf("SCREEN CHANGES: " .. ppu.GetDebugScreenChanges(),
+        stateX - 410, stateY + 4, 400, "left")
 
     -- Show the important saved PPU state values for the selected scanline.
     local selected = loopy.ppuStates[selectedState]
@@ -538,7 +658,9 @@ function ppu.DrawCharacterTiles()
         end
         love.graphics.rectangle("fill", xPos, yPos, itemWidth, itemHeight, 3, 3)
         love.graphics.setColor(0, 0, 0, 1)
-        love.graphics.print(string.format("%d/%d  SL:%d", i, totalStates, state.scanLine), xPos + 4, yPos + 3)
+        local reason = state.trigger or "unknown"
+        if state.mapperEvent and reason ~= "mapper" then reason = reason .. "+mapper" end
+        love.graphics.print(string.format("%d/%d  SL:%d %s", i, totalStates, state.scanLine, reason), xPos + 4, yPos + 3)
     end
     love.graphics.setColor(1, 1, 1, 1)
     --ppu.StartCharacterTiles()

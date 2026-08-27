@@ -14,6 +14,8 @@ local debugPPU2000 = false
 local ppu_data_buffer = 0x00
 local ppu_io_latch = 0x00
 local vRamAddress = 0x00
+local lastCPUWriteAddr = nil
+local lastCPUWriteData = 0x00
 
 local function readOAMData()
     local address = bit.band(ppuIO.OAMADDR or 0, 0xFF)
@@ -35,6 +37,8 @@ function ppuBus.Reset()
     ppu_data_buffer = 0x00
     ppu_io_latch = 0x00
     vRamAddress = 0x00
+    lastCPUWriteAddr = nil
+    lastCPUWriteData = 0x00
 
     for tableIndex = 0, 1 do
         for i = 0, 0x03FF do
@@ -220,10 +224,21 @@ end
 
 function ppuBus.CPUWrite(addr, data)
     ppu_io_latch = bit.band(data or 0, 0xFF)
+    lastCPUWriteAddr = bit.band(addr or 0, 0x07)
+    lastCPUWriteData = ppu_io_latch
     if CPURegisters.writeHandlers[addr] then
         CPURegisters.writeHandlers[addr](addr, data)
     end
     return nil
+end
+
+function ppuBus.GetDebugBusState()
+    return {
+        latch = ppu_io_latch,
+        dataBuffer = ppu_data_buffer,
+        lastWriteAddr = lastCPUWriteAddr,
+        lastWriteData = lastCPUWriteData
+    }
 end
 
 -- PPU Own Bus .. NOT FOR 2000-2007 Those are Mapped on the CPU to stored in internal registers location in PPU 
@@ -292,8 +307,22 @@ end
 -- Function Return Buffer 
     function ppuBus.ppuBuffer(startAddress, stopAddress)
         local Buffer = {}
+
+        -- CHR snapshots are by far the common use of this helper. Reading
+        -- through the mapper directly avoids repeating the full PPU address
+        -- decode and mapper lookup for all 8192 bytes.
+        if startAddress >= 0x0000 and stopAddress <= 0x1FFF then
+            local currentMapper = mapper[cart.mapper].mapper
+            local readCHR = currentMapper.PPURead
+            for i = startAddress,stopAddress do
+                Buffer[i] = readCHR(i) or 0x00
+            end
+            return Buffer
+        end
+
+        local readPPU = ppuBus.PPURead
         for i = startAddress,stopAddress do
-            Buffer[i] = ppuBus.PPURead(i)
+            Buffer[i] = readPPU(i)
         end
         return Buffer
     end
