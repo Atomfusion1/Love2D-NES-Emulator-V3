@@ -110,6 +110,17 @@ local CPURegisters = {
             ppuIO.MASKS = data
             loopy.drawScreen = bit.band(data, 0x08) ~= 0 and true or false
             loopy.drawSprites = bit.band(data, 0x10) ~= 0 and true or false
+            -- PPUMASK is commonly changed mid-frame for letterbox and split
+            -- screen effects. Preserve the rendering state at this scanline
+            -- so the final compositor can turn background/sprites on and off
+            -- per scanline instead of using only the final register value.
+            if loopy.scanLine < 242 then
+                loopy:SearchPPUStatesInRangeAndReplace(
+                    loopy.scanLine - 1,
+                    loopy.scanLine + 1,
+                    require("NES.PPU.ppu").GetPPUState(loopy.scanLine)
+                )
+            end
             --print(loopy.drawScreen, loopy.drawSprites)
             if debugPPU then print(string.format("Write PPU 2001 %x %x", addr, data)) end
             return nil
@@ -175,7 +186,8 @@ local CPURegisters = {
             if false then print(string.format("Write PPU 2007 %x, %x, %x, %s", addr, data, loopy.register_vram_addr ,tostring(ppuIO.IsBitSet(ppuIO.CTRL, 2)))) end
             return nil
         end, -- PPU Data
-        [0x4014] = function (addr, data) OAM.RefreshOAM(data, ppuIO.OAMADDR) end, -- DMA
+        -- $4014 is queued by NES.BUS.bus so the CPU can apply the DMA stall
+        -- after the writing instruction completes.
     },
 }
 

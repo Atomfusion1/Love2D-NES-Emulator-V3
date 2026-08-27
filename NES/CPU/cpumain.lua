@@ -3,6 +3,7 @@ local cpuInternal   = require("NES.CPU.cpuInternal")
 local cart          = require("NES.Cartridge.Cartridge")
 local ppu           = require("NES.PPU.ppu")
 local ppuIO         = require("NES.PPU.ppuIO")
+local OAM           = require("NES.PPU.ppuOAM")
 local bus           = require("NES.BUS.bus")
 local addressMode   = require("NES.CPU.opcodes.addressmodes")
 local apu           = require("NES.Audio.apu")
@@ -210,6 +211,30 @@ function cpu.ExecuteCycles(totalCycles)
                     displayTimer.RecordComponent("ppuEmu", love.timer.getTime() - ppuEmuStart)
                 end
                 ppuCycleDebt = 0
+            end
+
+            -- OAM DMA starts after the instruction that wrote $4014. The
+            -- transfer itself is batched for this instruction-level CPU;
+            -- its CPU time and the shared APU/PPU clocks are still charged.
+            local dmaRequest = bus.TakeOAMDMARequest()
+            if dmaRequest then
+                OAM.RefreshOAM(dmaRequest.page, dmaRequest.oamAddress, CPURead)
+
+                -- DMA takes 513 cycles when it begins on an odd CPU cycle
+                -- and one additional alignment cycle when it begins even.
+                local dmaCycles = (band(cpu.totalCycles, 1) == 0) and 514 or 513
+                cycleCount = cycleCount + dmaCycles
+                cpu.totalCycles = cpu.totalCycles + dmaCycles
+                apu.Clock(dmaCycles)
+                ppuCycleDebt = ppuCycleDebt + dmaCycles
+
+                if ppuCycleDebt >= 1 then
+                    if not PPUUpdate(ppuCycleDebt) then
+                        cpu.drawFrame = true
+                        totalCycles = 0
+                    end
+                    ppuCycleDebt = 0
+                end
             end
         end
     end

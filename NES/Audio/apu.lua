@@ -1,9 +1,11 @@
 local pulseSound = require("NES.Audio.apu_pulse")
 local triangleSound = require("NES.Audio.apu_triangle")
 local noiseSound = require("NES.Audio.apu_noise")
+local dmcSound = require("NES.Audio.apu_dmc")
 local lengthTable = require("NES.Audio.lengthcounter").LoadCounterTable()
 
 VolumeMulti = 1 --& Global Value for Volume Multiplier
+APUChannelMute = { false, false, false, false, false }
 local apu = {}
 local frameCycles = 0
 local frameIRQ = false
@@ -26,6 +28,7 @@ end
 
 function apu.Clock(cycles)
     cycles = cycles or 0
+    dmcSound.Clock(cycles)
     lengthCycles = lengthCycles + cycles
     while lengthCycles >= HALF_FRAME_PERIOD do
         lengthCycles = lengthCycles - HALF_FRAME_PERIOD
@@ -52,6 +55,7 @@ function apu.FrameCounterWrite(data)
 end
 
 function apu.CheckIRQ()
+    if dmcSound.CheckIRQ() then return true end
     return frameIRQ
 end
 
@@ -63,13 +67,17 @@ function apu.StatusRead()
         end
     end
     frameIRQ = false
-    return value
+    return bit.bor(value, dmcSound.StatusBits())
 end
 
 -- Register state needed even when audio output is disabled.  This is kept
 -- separate from the Love audio generators so CPU-visible APU behavior does
 -- not depend on the user's sound setting.
 function apu.RegisterWrite(addr, data)
+    if addr >= 0x4010 and addr <= 0x4013 then
+        dmcSound.RegisterWrite(addr, data)
+        return
+    end
     local channel
     if addr >= 0x4000 and addr <= 0x4003 then channel = 1
     elseif addr >= 0x4004 and addr <= 0x4007 then channel = 2
@@ -92,10 +100,23 @@ end
 
 --# Handle APU Updates Per Frame
 function apu.TimerCheck(dt)
-    pulseSound.UpdatePulse(1, dt)
-    pulseSound.UpdatePulse(2, dt)
-    triangleSound.UpdateTriangle(dt)
-    noiseSound.UpdateNoise(dt)
+    if not APUChannelMute[1] then pulseSound.UpdatePulse(1, dt) end
+    if not APUChannelMute[2] then pulseSound.UpdatePulse(2, dt) end
+    if not APUChannelMute[3] then triangleSound.UpdateTriangle(dt) end
+    if not APUChannelMute[4] then noiseSound.UpdateNoise(dt) end
+end
+
+function apu.SetChannelMuted(channel, muted)
+    if channel < 1 or channel > 5 then return end
+    APUChannelMute[channel] = muted and true or false
+    if APUChannelMute[channel] then
+        if channel == 1 or channel == 2 then pulseSound.StopPulseNote(channel)
+        elseif channel == 3 then triangleSound.StopTriangle()
+        elseif channel == 4 then noiseSound.StopNoise()
+        else dmcSound.SetAudioEnabled(false) end
+    elseif channel == 5 then
+        dmcSound.SetAudioEnabled(UseSound ~= false)
+    end
 end
 
 --# Sound Off
@@ -109,6 +130,7 @@ end
 --# Handle APU Status Handles
 function apu.StatusHandle(addr, data)
     if addr ~= 0x4015 then return end
+    dmcSound.StatusHandle(data)
 
     channelEnable = bit.band(data, 0x0F)
     for channel = 1, 4 do
@@ -132,24 +154,41 @@ function apu.StatusHandle(addr, data)
     if bit.band(data, 0x08) == 0 then
         noiseSound.StopNoise()
     end
+
+end
+
+function apu.SetAudioEnabled(enabled)
+    dmcSound.SetAudioEnabled(enabled)
+end
+
+function apu.SetVolume(multiplier)
+    dmcSound.SetVolume(multiplier)
+end
+
+function apu.SetDMCVolumeScale(scale)
+    dmcSound.SetMixScale(scale)
+end
+
+function apu.GetDMCVolumeScale()
+    return dmcSound.GetMixScale()
 end
 
 --# Handle APU Addresses
 function apu.APUSound(addr, data)
     --@ Pulse 1
-    if addr >= 0x4000 and addr <= 0x4003 then
+    if addr >= 0x4000 and addr <= 0x4003 and not APUChannelMute[1] then
         pulseSound.HandlePulse(1, addr, data)
     end
     --@ Pulse 2
-    if addr >= 0x4004 and addr <= 0x4007 then
+    if addr >= 0x4004 and addr <= 0x4007 and not APUChannelMute[2] then
         pulseSound.HandlePulse(2, addr, data)
     end
     --@ Triangle
-    if addr >= 0x4008 and addr <= 0x400B then
+    if addr >= 0x4008 and addr <= 0x400B and not APUChannelMute[3] then
         triangleSound.HandleTriangle(addr, data)
     end
     --@ Noise
-    if addr >= 0x400C and addr <= 0x400F then
+    if addr >= 0x400C and addr <= 0x400F and not APUChannelMute[4] then
         noiseSound.HandleNoise(addr, data)
     end
 end
@@ -165,7 +204,21 @@ function apu.Initialize()
     channelEnable = 0
     channelLength = { 0, 0, 0, 0 }
     channelHalt = { false, false, false, false }
+    APUChannelMute = { false, false, false, false, false }
+    dmcSound.Initialize()
     return apu
+end
+
+function apu.SetDMCReadCallback(callback)
+    dmcSound.SetReadCallback(callback)
+end
+
+function apu.GetDMCOutput()
+    return dmcSound.GetOutputLevel()
+end
+
+function apu.GetDMCDebugStatus()
+    return dmcSound.GetDebugStatus()
 end
 
 return apu

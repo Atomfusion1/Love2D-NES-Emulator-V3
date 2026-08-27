@@ -48,6 +48,17 @@ local Sprite0Scanline
 local ppuCycles
 local debug = false
 ppu.DrawScreen = false
+-- Debugger-only layer visibility. These flags never alter emulation state.
+ppu.debugShowBackground = true
+ppu.debugShowSprites = true
+
+function ppu.ToggleDebugBackground()
+    ppu.debugShowBackground = not ppu.debugShowBackground
+end
+
+function ppu.ToggleDebugSprites()
+    ppu.debugShowSprites = not ppu.debugShowSprites
+end
 
 -- Loading another cartridge is a complete console power cycle. Reset both the
 -- public PPU state and the local timing state while retaining table identities
@@ -58,6 +69,8 @@ function ppu.Reset()
     ppu.vBlankEnd = false
     ppu.currentFrame = 1
     ppu.DrawScreen = false
+    ppu.debugShowBackground = true
+    ppu.debugShowSprites = true
     ppu.sprite0Offset = 0
     ppu.scanLineOffset = 0
     cachedTileSet = nil
@@ -331,15 +344,28 @@ function ppu.StartGameWindow()
     displayTimer.RecordComponent("ppuSetup", love.timer.getTime() - setupStart)
 --# Draw Sprites behind background
     local spriteStart = love.timer.getTime()
-    PPUtoLove.DrawBehindSpritesOnly(ptrScreenBuffer)
+    local debugLayers = EnableDebug and DebugActiveTab == "ppu"
+    local showBackground = not debugLayers or ppu.debugShowBackground
+    local showSprites = not debugLayers or ppu.debugShowSprites
+    if showSprites then
+        PPUtoLove.DrawBehindSpritesOnly(ptrScreenBuffer)
+    end
     displayTimer.RecordComponent("ppuSprites", love.timer.getTime() - spriteStart)
 --# Draw Background 
     local backgroundStart = love.timer.getTime()
-    if loopy.drawScreen then PPUtoLove.DrawMainScreen(ptrScreenBuffer) end
+    -- Rendering can be enabled and disabled mid-frame.  Do not use the
+    -- final mask value as a frame-wide gate: DrawMainScreen applies each
+    -- saved scanline state's isDrawScreen flag and leaves disabled lines at
+    -- the backdrop color.
+    if showBackground then
+        PPUtoLove.DrawMainScreen(ptrScreenBuffer)
+    end
     displayTimer.RecordComponent("ppuBackground", love.timer.getTime() - backgroundStart)
 --# Draw Forground Sprites
     local foregroundStart = love.timer.getTime()
-    PPUtoLove.DrawInFrontSpritesOnly(ptrScreenBuffer)
+    if showSprites then
+        PPUtoLove.DrawInFrontSpritesOnly(ptrScreenBuffer)
+    end
     displayTimer.RecordComponent("ppuSprites", love.timer.getTime() - foregroundStart)
 --# Load Background to buffer
     local uploadStart = love.timer.getTime()

@@ -177,27 +177,29 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
             end
             local tileYIndex, effectiveNametableY = loopy.AdvanceVertical(
                 coarseScrollY, nametableY, screenY)
-            for tileX = -1, 32 do
-                local screenTileX = baseScreenX + tileX * 8
-                local screenTileY = baseScreenY + tileY * 8
-                local tileXIndex = tileX + coarseScrollX
-                local effectiveNametableX = nametableX
-                if tileXIndex < 0 then
-                    tileXIndex = tileXIndex + 32
-                    effectiveNametableX = 1 - effectiveNametableX
-                elseif tileXIndex >= 32 then
-                    tileXIndex = tileXIndex - 32
-                    effectiveNametableX = 1 - effectiveNametableX
+            if state.isDrawScreen ~= false then
+                for tileX = -1, 32 do
+                    local screenTileX = baseScreenX + tileX * 8
+                    local screenTileY = baseScreenY + tileY * 8
+                    local tileXIndex = tileX + coarseScrollX
+                    local effectiveNametableX = nametableX
+                    if tileXIndex < 0 then
+                        tileXIndex = tileXIndex + 32
+                        effectiveNametableX = 1 - effectiveNametableX
+                    elseif tileXIndex >= 32 then
+                        tileXIndex = tileXIndex - 32
+                        effectiveNametableX = 1 - effectiveNametableX
+                    end
+                    local localNamespace = 0x2000
+                        + effectiveNametableX * 0x400 + effectiveNametableY * 0x800
+                    local tileID, attributeValue = calculateTileAndAttributeAddresses(
+                        tileXIndex, tileYIndex, localNamespace)
+                    local tileAddr = backgroundTable * 0x1000 + tileID * 16 + fineY
+                    local tile_lsb, tile_msb = tileSet[tileAddr], tileSet[tileAddr + 8]
+                    if tile_lsb == nil then return end
+                    drawTileRow(screenTileX, screenTileY, fineY, tile_lsb, tile_msb,
+                        attributeValue, ptrScreenBuffer)
                 end
-                local localNamespace = 0x2000
-                    + effectiveNametableX * 0x400 + effectiveNametableY * 0x800
-                local tileID, attributeValue = calculateTileAndAttributeAddresses(
-                    tileXIndex, tileYIndex, localNamespace)
-                local tileAddr = backgroundTable * 0x1000 + tileID * 16 + fineY
-                local tile_lsb, tile_msb = tileSet[tileAddr], tileSet[tileAddr + 8]
-                if tile_lsb == nil then return end
-                drawTileRow(screenTileX, screenTileY, fineY, tile_lsb, tile_msb,
-                    attributeValue, ptrScreenBuffer)
             end
             scanLine = scanLine + 1
         end

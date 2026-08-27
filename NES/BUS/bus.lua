@@ -3,11 +3,13 @@ local mapper     = require("NES.Cartridge.Mappers")
 local memory     = require("NES.CPU.cpuram")
 local controller = require("NES.Controller.controller")
 local ppuBus     = require("NES.PPU.ppuBus")
+local ppuIO      = require("NES.PPU.ppuIO")
 local apu        = require("NES.Audio.apu")
 
 local rshift, band, bor = bit.rshift, bit.band, bit.bor
 
 local bus        = {}
+local pendingOAMDMA
 -- CPU data-bus latch used by unmapped/open-bus reads.  Operand fetches and
 -- ordinary mapped reads naturally update it; an open-bus read leaves it
 -- unchanged, matching the 2A03 bus behavior.
@@ -17,6 +19,14 @@ local function driveBus(value)
     value = band(value or 0, 0xFF)
     cpuOpenBus = value
     return value
+end
+
+-- OAM DMA is queued by the $4014 write and consumed by the CPU after the
+-- instruction completes. Capture OAMADDR at request time.
+function bus.TakeOAMDMARequest()
+    local request = pendingOAMDMA
+    pendingOAMDMA = nil
+    return request
 end
 
 --# Initialize Mapper Cache
@@ -108,11 +118,17 @@ function bus.CPUWrite(addr, data)
             return
         end
         if addr == 0x4014 then
-            ppuBus.CPUWrite(addr, data)
+            pendingOAMDMA = {
+                page = data,
+                oamAddress = ppuIO.OAMADDR or 0
+            }
         end
-        if addr >= 0x4000 and addr <= 0x400F then
+        -- APU pulse/triangle/noise and DMC registers.  The DMC control
+        -- registers live at $4010-$4013 and must reach RegisterWrite even
+        -- though they are outside the waveform register range.
+        if addr >= 0x4000 and addr <= 0x4013 then
             apu.RegisterWrite(addr, data)
-            if UseSound then apu.APUSound(addr, data) end
+            if UseSound and addr <= 0x400F then apu.APUSound(addr, data) end
         end
         if addr == 0x4015 then
             apu.StatusHandle(addr,data)
@@ -134,6 +150,10 @@ function bus.CheckIRQ()
         return mapper[cart.mapper].mapper.CheckIRQ()
     end
 end
+
+-- Starter DMC reads use the normal CPU address map. Cycle stealing is added
+-- later with the shared DMA scheduler.
+apu.SetDMCReadCallback(bus.CPURead)
 
 return bus
 
