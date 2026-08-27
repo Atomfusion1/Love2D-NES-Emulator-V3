@@ -10,18 +10,21 @@ local paletteRGB = require("NES.PPU.VGA_Pallette").Pallette
 local displayTimer = require("Includes.displaytimer")
 local oam         = require("NES.PPU.ppuOAM")
 local loopy       = require("NES.PPU.loopy")
+local apu         = require("NES.Audio.apu")
 
 local testing = {}
 local holdingString = {}
 local activeTab = "overview"
 DebugActiveTab = activeTab
-local tabOrder = { "overview", "cpu", "ppu", "memory", "performance" }
+local ppuLayerRects = {}
+local tabOrder = { "overview", "cpu", "ppu", "memory", "performance", "apu" }
 local tabLabels = {
     overview = "Overview",
     cpu = "CPU",
     ppu = "PPU",
     memory = "Memory",
-    performance = "Performance"
+    performance = "Performance",
+    apu = "APU"
 }
 local toolbarButtons = {
     { id = "run", label = "Run" },
@@ -38,6 +41,7 @@ local tabRects = {}
 local memorySourceRects = {}
 local memoryNavRects = {}
 local performanceRects = {}
+local audioRects = {}
 local nametableRect = nil
 local paletteCycleRect = nil
 local performanceFocus = "overall"
@@ -537,6 +541,19 @@ function testing.MousePressed(x, y, button)
         ppu.CycleDebugNametableMode()
         return
     end
+    if activeTab == "ppu" then
+        for _, rect in ipairs(ppuLayerRects) do
+            if x >= rect.x and x <= rect.x + rect.width
+                and y >= rect.y and y <= rect.y + rect.height then
+                if rect.layer == "background" then
+                    ppu.ToggleDebugBackground()
+                else
+                    ppu.ToggleDebugSprites()
+                end
+                return
+            end
+        end
+    end
     if activeTab == "ppu" and paletteCycleRect
         and x >= paletteCycleRect.x and x <= paletteCycleRect.x + paletteCycleRect.width
         and y >= paletteCycleRect.y and y <= paletteCycleRect.y + paletteCycleRect.height then
@@ -551,6 +568,31 @@ function testing.MousePressed(x, y, button)
                 else
                     performanceFocus = rect.action
                     PerformanceDetailEnabled = performanceFocus ~= "overall"
+                end
+                return
+            end
+        end
+    end
+    if button == 1 and activeTab == "apu" then
+        for _, rect in ipairs(audioRects) do
+            if x >= rect.x and x <= rect.x + rect.width
+                and y >= rect.y and y <= rect.y + rect.height then
+                if rect.action == "toggle" then
+                    UseSound = not UseSound
+                    if not UseSound and SoundOff then SoundOff() end
+                    apu.SetAudioEnabled(UseSound)
+                elseif rect.action == "down" then
+                    VolumeMulti = math.max(0, (VolumeMulti or 1) - 0.5)
+                    apu.SetVolume(VolumeMulti)
+                elseif rect.action == "up" then
+                    VolumeMulti = math.min(10, (VolumeMulti or 1) + 0.5)
+                    apu.SetVolume(VolumeMulti)
+                elseif rect.action == "dmcDown" then
+                    apu.SetDMCVolumeScale(math.max(0, apu.GetDMCVolumeScale() - 0.005))
+                elseif rect.action == "dmcUp" then
+                    apu.SetDMCVolumeScale(math.min(1, apu.GetDMCVolumeScale() + 0.005))
+                elseif rect.channel then
+                    apu.SetChannelMuted(rect.channel, not APUChannelMute[rect.channel])
                 end
                 return
             end
@@ -703,6 +745,16 @@ function testing.DisplayUI()
             love.graphics.setColor(0.75, 0.85, 0.95, 1)
             love.graphics.print("PPU visualizations are refreshed while this tab is active.", 600, 110)
             love.graphics.print("Use C/V for PPU state and Y or the button for CHR palette.", 600, 130)
+            -- Layer controls live beside the nametable/scroll visualization.
+            -- They affect only the debugger preview while this tab is active.
+            ppuLayerRects = {
+                { x = 1295, y = 50, width = 105, height = 24, layer = "background" },
+                { x = 1407, y = 50, width = 105, height = 24, layer = "sprites" }
+            }
+            drawButton("BG: " .. (ppu.debugShowBackground and "ON" or "OFF"),
+                1295, 50, 105, 24, ppu.debugShowBackground)
+            drawButton("Sprites: " .. (ppu.debugShowSprites and "ON" or "OFF"),
+                1407, 50, 105, 24, ppu.debugShowSprites)
             paletteCycleRect = { x = 600, y = 150, width = 145, height = 26 }
             drawButton("Cycle palette (Y)", 600, 150, 145, 26, false)
             local paletteBase = (G_ColorOffset % 8) * 4
@@ -719,6 +771,44 @@ function testing.DisplayUI()
                 love.graphics.setColor(1, 1, 1, 1)
                 love.graphics.rectangle("line", swatchX, 150, 24, 24)
             end
+        elseif activeTab == "apu" then
+            love.graphics.setColor(0.75, 0.85, 0.95, 1)
+            love.graphics.print("APU / Audio", 600, 110)
+            love.graphics.setColor(1, 1, 1, 1)
+            love.graphics.print("Controls affect audio output only; CPU/APU register behavior continues.", 600, 140)
+            audioRects = {
+                { x = 600, y = 175, width = 150, height = 28, action = "toggle" },
+                { x = 600, y = 220, width = 80, height = 28, action = "down" },
+                { x = 690, y = 220, width = 80, height = 28, action = "up" },
+                { x = 600, y = 315, width = 80, height = 28, action = "dmcDown" },
+                { x = 690, y = 315, width = 80, height = 28, action = "dmcUp" },
+                { x = 600, y = 275, width = 125, height = 28, channel = 1 },
+                { x = 735, y = 275, width = 125, height = 28, channel = 2 },
+                { x = 870, y = 275, width = 125, height = 28, channel = 3 },
+                { x = 1005, y = 275, width = 125, height = 28, channel = 4 },
+                { x = 1140, y = 275, width = 125, height = 28, channel = 5 }
+            }
+            drawButton("Sound: " .. (UseSound and "ON" or "OFF"), 600, 175, 150, 28, UseSound)
+            drawButton("Volume -", 600, 220, 80, 28, false)
+            drawButton("Volume +", 690, 220, 80, 28, false)
+            love.graphics.setColor(0.8, 0.9, 1, 1)
+            love.graphics.print(string.format("Volume multiplier: %.1fx", VolumeMulti or 1), 790, 226)
+            drawButton("DMC -", 600, 315, 80, 28, false)
+            drawButton("DMC +", 690, 315, 80, 28, false)
+            love.graphics.setColor(0.8, 0.9, 1, 1)
+            love.graphics.print(string.format("DMC mix: %.1f%% of master", apu.GetDMCVolumeScale() * 100), 790, 321)
+            local channelNames = { "Pulse 1", "Pulse 2", "Triangle", "Noise", "DMC" }
+            for channel = 1, 5 do
+                local rect = audioRects[channel + 5]
+                local muted = APUChannelMute[channel]
+                drawButton(channelNames[channel] .. (muted and ": OFF" or ": ON"),
+                    rect.x, rect.y, rect.width, rect.height, not muted)
+            end
+            local dmcStatus = apu.GetDMCDebugStatus()
+            love.graphics.setColor(0.7, 0.82, 0.92, 1)
+            love.graphics.print(string.format("DMC: %s  bytes: %d  addr: $%04X  output: %d",
+                dmcStatus.enabled and "ACTIVE" or "IDLE", dmcStatus.bytesRemaining,
+                dmcStatus.currentAddress, dmcStatus.outputLevel), 600, 355)
         elseif activeTab == "performance" then
             local stats = displayTimer.GetStats()
             love.graphics.setColor(0.75, 0.85, 0.95, 1)

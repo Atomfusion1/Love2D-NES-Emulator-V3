@@ -1,6 +1,7 @@
 local addressMode = require("NES.CPU.opcodes.addressmodes")
 local controller = require("NES.Controller.controller")
 local selectFile = require("Emulator.UI.Emulator.selectfile")
+local apu = require("NES.Audio.apu")
 
 local keyboard = {}
 -- Start the CHR debugger on background palette 0 ($3F00-$3F03).
@@ -142,6 +143,7 @@ local keypressed = {
     end,
     ["n"] = function() UseSound = not UseSound
         SoundOff()
+        apu.SetAudioEnabled(UseSound)
         print("Sound Mute ", not UseSound) 
 
         end,
@@ -151,9 +153,11 @@ local keypressed = {
     ["7"] = function() require("Emulator.savestate").Load("7") end,
     ["8"] = function() require("Emulator.savestate").Load("8") end,
     ["9"] = function() require("Emulator.savestate").Load("9") end,
-    ["="] = function() VolumeMulti = VolumeMulti + 2
+    ["="] = function() VolumeMulti = math.min(10, (VolumeMulti or 1) + 0.5)
+        apu.SetVolume(VolumeMulti)
         print("Volume up "..VolumeMulti) end,
-    ["-"] = function() VolumeMulti = VolumeMulti - 2
+    ["-"] = function() VolumeMulti = math.max(0, (VolumeMulti or 1) - 0.5)
+        apu.SetVolume(VolumeMulti)
         print("Volume down "..VolumeMulti)end,
     ["l"] = function() 
         EnableDebug = not EnableDebug 

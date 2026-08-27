@@ -164,7 +164,22 @@ end
 local files = fileList
 local keypressed = {
     ["`"] = function()
-        selectFile.isPopupVisible = not selectFile.isPopupVisible    end,
+        selectFile.isPopupVisible = not selectFile.isPopupVisible
+    end,
+    -- Love2D reports the backtick/tilde key as "grave" on many layouts.
+    ["grave"] = function()
+        selectFile.isPopupVisible = not selectFile.isPopupVisible
+    end,
+    ["backquote"] = function()
+        selectFile.isPopupVisible = not selectFile.isPopupVisible
+    end,
+    ["tilde"] = function()
+        selectFile.isPopupVisible = not selectFile.isPopupVisible
+    end,
+    ["escape"] = function()
+        selectFile.isPopupVisible = false
+        selectFile.errorMessage = nil
+    end,
     ["up"] = function()
         selected_file_index = math.max(selected_file_index - 1, 1)
         if selected_file_index <= scroll_offset and scroll_offset > 0 then
@@ -187,8 +202,11 @@ local keypressed = {
 
 
 function selectFile.KeyboardInput(key)
-    if keypressed[key] and selectFile.isPopupVisible or key == "`" then
-        print(key)
+    if key == "`" or key == "grave" or key == "backquote" or key == "tilde" or key == "escape" then
+        keypressed[key]()
+        return
+    end
+    if selectFile.isPopupVisible and keypressed[key] then
         keypressed[key]()
     end
 end
