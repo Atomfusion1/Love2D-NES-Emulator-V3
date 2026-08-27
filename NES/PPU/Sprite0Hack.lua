@@ -23,7 +23,7 @@ local gamesSprite0Offset = {
     },
     ["Roms/Super Mario Bros. 3 (USA).nes"] = {
         sprite0Offset = 0,
-        scanLineOffset = 9
+        scanLineOffset = -2
     },
     ["Roms/Battle of Olympus, The.nes"] = {
         sprite0Offset = -6,
@@ -52,6 +52,10 @@ local gamesSprite0Offset = {
     ["Roms/Lemmings.nes"] = {
         sprite0Offset = 5,
         scanLineOffset = 0
+    },    
+    ["Roms/SimpleParallaxDemo.nes"] = {
+        sprite0Offset = 5,
+        scanLineOffset = 3
     },
 }
 function Sprite0Hack:CheckForSprite0Hit(gameName)
