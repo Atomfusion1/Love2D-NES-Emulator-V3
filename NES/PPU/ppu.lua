@@ -258,7 +258,7 @@ local function getCachedTileSet()
     return cachedTileSet
 end
 
-function ppu.GetPPUState(scanLine, offset, is2006)
+function ppu.GetPPUState(scanLine, offset, is2006, trigger)
     local state = {
         scanLine            = scanLine,
         spriteTileSet       = getCachedTileSet(),
@@ -277,14 +277,16 @@ function ppu.GetPPUState(scanLine, offset, is2006)
         mirror              = cart.Mirror,
         isDrawScreen        = loopy.drawScreen,
         isDrawSprites       = loopy.drawSprites,
+        mask                = ppuIO.MASKS,
         offsetY             = offset or 0,
-        is2006              = is2006 or false
+        is2006              = is2006 or false,
+        trigger             = trigger or "unknown"
     }
     return state
 end
 
 --# Loopy Save State 
-function ppu.savePPUStates(scanLine, offset, is2006)
+function ppu.savePPUStates(scanLine, offset, is2006, trigger)
     local state = {
         scanLine            = scanLine,
         spriteTileSet       = getCachedTileSet(),
@@ -303,8 +305,10 @@ function ppu.savePPUStates(scanLine, offset, is2006)
         mirror              = cart.Mirror,
         isDrawScreen        = loopy.drawScreen,
         isDrawSprites       = loopy.drawSprites,
+        mask                = ppuIO.MASKS,
         offsetY             = offset or 0,
-        is2006              = is2006 or false
+        is2006              = is2006 or false,
+        trigger             = trigger or "scanline"
     }
     table.insert(loopy.ppuStates, state)
 end
@@ -498,6 +502,27 @@ function ppu.DrawCharacterTiles()
     end
     stateButton("C  Prev", stateX)
     stateButton("V  Next", stateX + 88)
+
+    -- Show the important saved PPU state values for the selected scanline.
+    local selected = loopy.ppuStates[selectedState]
+    if selected then
+        local detailX = stateX
+        local detailY = stateY - 42
+        love.graphics.setColor(0.7, 0.82, 0.92, 1)
+        love.graphics.print(string.format(
+            "Selected SL:%d  trigger:%s  NT:%d,%d  coarse:%d,%d  fine:%d,%d",
+            selected.scanLine or 0, selected.trigger or "unknown",
+            selected.namespace_x or 0, selected.namespace_y or 0,
+            selected.offset_x or 0,
+            selected.offset_y or 0, selected.fineOffset_x or 0,
+            selected.fineOffset_y or 0), detailX, detailY)
+        love.graphics.print(string.format(
+            "MASK:$%02X  BG table:%d  Sprite table:%d  Mirror:%d  BG:%s  Sprites:%s",
+            selected.mask or 0,
+            selected.backgroundTable or 0, selected.spriteTable or 0,
+            selected.mirror or 0, selected.isDrawScreen == false and "OFF" or "ON",
+            selected.isDrawSprites == false and "OFF" or "ON"), detailX, detailY + 20)
+    end
     
     for i = 1, totalStates do
         local state = loopy.ppuStates[i]

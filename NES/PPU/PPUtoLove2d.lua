@@ -164,15 +164,21 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                 and scanLine == states[ppuIRQCount + 1].scanLine + scanLineOffset then
                 ppuIRQCount = ppuIRQCount + 1
                 state = states[ppuIRQCount]
-                nametableX, nametableY = state.namespace_x, state.namespace_y
-                coarseScrollX, coarseScrollY = state.offset_x, state.offset_y
-                fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
-                tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
-                cart.Mirror = state.mirror
-                baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
-                if state.is2006 then
-                    local holder = tileY - state.offsetY
-                    coarseScrollY = -holder
+                -- A PPUMASK ($2001) state is a rendering-layer change, not a
+                -- scroll/nametable change. Keep the prior background source
+                -- so enabling sprites or masking the screen cannot blank or
+                -- reposition the map.
+                if state.trigger ~= "$2001" then
+                    nametableX, nametableY = state.namespace_x, state.namespace_y
+                    coarseScrollX, coarseScrollY = state.offset_x, state.offset_y
+                    fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
+                    tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
+                    cart.Mirror = state.mirror
+                    baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
+                    if state.is2006 then
+                        local holder = tileY - state.offsetY
+                        coarseScrollY = -holder
+                    end
                 end
             end
             local tileYIndex, effectiveNametableY = loopy.AdvanceVertical(

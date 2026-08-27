@@ -101,24 +101,25 @@ local CPURegisters = {
             ppuIO.BackgroundTable = bit.band(data, 0x10) ~= 0 and 1 or 0
             ppuIO.SpriteTable = bit.band(data, 0x08) ~= 0 and 1 or 0
             loopy:WriteControl(data)
-            if loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1, loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine)) end
+            if loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1, loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine, nil, nil, "$2000")) end
             if debugPPU2000 then print(string.format("%i, Write PPU 2000 nameX:%x nameY:%x BackGroundTable:%x SpriteTable:%x",
                 loopy.scanLine, loopy.nametable_x, loopy.nametable_y, ppuIO.BackgroundTable, ppuIO.SpriteTable)) end
             return nil
         end, -- control
         [0x0001] = function (addr, data) 
+            local oldMask = ppuIO.MASKS
             ppuIO.MASKS = data
             loopy.drawScreen = bit.band(data, 0x08) ~= 0 and true or false
             loopy.drawSprites = bit.band(data, 0x10) ~= 0 and true or false
-            -- PPUMASK is commonly changed mid-frame for letterbox and split
-            -- screen effects. Preserve the rendering state at this scanline
-            -- so the final compositor can turn background/sprites on and off
-            -- per scanline instead of using only the final register value.
-            if loopy.scanLine < 242 then
+            -- Save a scanline state only when background rendering changes.
+            -- Sprite-only $2001 changes are handled by sprite evaluation and
+            -- must not replace the background scroll state for the scanline.
+            if loopy.scanLine < 242
+                and bit.band(oldMask, 0x08) ~= bit.band(data, 0x08) then
                 loopy:SearchPPUStatesInRangeAndReplace(
                     loopy.scanLine - 1,
                     loopy.scanLine + 1,
-                    require("NES.PPU.ppu").GetPPUState(loopy.scanLine)
+                    require("NES.PPU.ppu").GetPPUState(loopy.scanLine, nil, nil, "$2001")
                 )
             end
             --print(loopy.drawScreen, loopy.drawSprites)
@@ -149,7 +150,7 @@ local CPURegisters = {
                 loopy:WriteScroll(data)
                 -- Tigger Save State 
     --print("2005 " .. loopy.scanLine, loopy.register_vram_addr)
-                if loopy.scanLine > 0 and loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine  -1, loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine)) end
+                if loopy.scanLine > 0 and loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine  -1, loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine, nil, nil, "$2005")) end
                 if debugPPU2005 and loopy.scanLine > 240 then
                     print(string.format("%i, Write PPU 2005.2 fineY:%x courseY:%x data %x",
                         loopy.scanLine, loopy.fine_y, loopy.course_y, data))
@@ -169,7 +170,7 @@ local CPURegisters = {
                 loopy:WriteAddress(data)
     --print(" 2006 " .. loopy.scanLine, offsetY, loopy.register_vram_addr)
                 local splitCoarseY = bit.rshift(bit.band(loopy.v, 0x03E0), 5)
-                if loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1 , loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine, splitCoarseY, true)) end
+                if loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1 , loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine, splitCoarseY, true, "$2006")) end
                 if debugPPU2006 then print(string.format("%i, Write PPU 2006.2 nameX:%x nameY:%x trimaddr %x data %x pointer:%04x",
                     loopy.scanLine, loopy.nametable_x, loopy.nametable_y, loopy.t, data, loopy.v)) end
             end

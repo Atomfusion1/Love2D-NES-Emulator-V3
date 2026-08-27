@@ -228,6 +228,17 @@ local function drawPanel(x, y, width, height, r, g, b, a)
     love.graphics.rectangle("line", x, y, width, height)
 end
 
+local function cpuMemoryRegionLabel(address)
+    address = bit.band(address or 0, 0xFFFF)
+    if address < 0x0800 then return "Fast internal RAM ($0000-$07FF)" end
+    if address < 0x2000 then return "Internal RAM mirrors ($0800-$1FFF)" end
+    if address < 0x4000 then return "PPU registers / mirrors ($2000-$3FFF)" end
+    if address < 0x4020 then return "APU and I/O registers ($4000-$401F)" end
+    if address < 0x6000 then return "Cartridge expansion / open bus ($4020-$5FFF)" end
+    if address < 0x8000 then return "Cartridge PRG-RAM / battery RAM ($6000-$7FFF)" end
+    return "Cartridge PRG-ROM ($8000-$FFFF)"
+end
+
 local drawButton
 
 local function CPUExecutionInsight()
@@ -730,16 +741,16 @@ function testing.DisplayUI()
             G_ViewMemory = 1
         elseif activeTab == "memory" and G_ViewMemory == 1 then
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.print("CPU Memory", 545, 205)
+            love.graphics.print("CPU Memory  -  " .. cpuMemoryRegionLabel(debug.viewMemory), 545, 205)
             testing.displayMemoryChunk(function(value) return bus.CPUPeek(value) end, debug.viewMemory, 540, 225, cpuMemory.programCounter)
             drawPCMemoryHistory()
         elseif activeTab == "memory" and G_ViewMemory == 2 then
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.print("PPU Memory", 545, 205)
+            love.graphics.print(string.format("PPU Memory  -  $%04X-$%04X", debug.viewMemory + 0x1F00, debug.viewMemory + 0x1F00 + 0xFF), 545, 205)
             testing.displayMemoryChunk(function(value) return ppuBus.PPURead(value) end, debug.viewMemory+0x1F00, 540, 225)
         elseif activeTab == "memory" and G_ViewMemory == 3 then
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.print("OAM Memory", 545, 205)
+            love.graphics.print("OAM Memory  -  Sprite OAM ($00-$FF)", 545, 205)
             testing.displayMemoryChunk(function(value) return oam[value] end, 0x00, 540, 225)
         elseif activeTab == "ppu" then
             love.graphics.setColor(0.75, 0.85, 0.95, 1)
