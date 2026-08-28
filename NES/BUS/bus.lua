@@ -5,6 +5,7 @@ local controller = require("NES.Controller.controller")
 local ppuBus     = require("NES.PPU.ppuBus")
 local ppuIO      = require("NES.PPU.ppuIO")
 local apu        = require("NES.Audio.apu")
+local cheats     = require("Emulator.cheats")
 
 local rshift, band, bor = bit.rshift, bit.band, bit.bor
 
@@ -55,7 +56,9 @@ function bus.CPURead(addr)
         -- mappers expose PRG RAM at $6000-$7FFF, so this range must not be
         -- treated globally as open bus.  The mapper decides which portions
         -- are backed or unmapped.
-        return driveBus(mapperRead(addr))
+        local value = mapperRead(addr)
+        if cheats.romOverridesActive then value = cheats.OverrideROMRead(addr, value) end
+        return driveBus(value)
 --% Read Internal CPU RAM
     elseif addr < 0x2000 then
         local cpuRAMIndex    = band(addr, 0x07ff)
@@ -94,7 +97,9 @@ function bus.CPUPeek(addr)
         mapperRead = cachedMapperCPURead
     end
     if addr >= 0x4020 then
-        return mapperRead(addr)
+        local value = mapperRead(addr)
+        if cheats.romOverridesActive then value = cheats.OverrideROMRead(addr, value) end
+        return value
     elseif addr < 0x2000 then
         return CPURAM[band(addr, 0x07ff)]
     elseif addr >= 0x2000 and addr <= 0x3FFF then

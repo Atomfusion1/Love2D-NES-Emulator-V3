@@ -15,6 +15,7 @@ local profile       = require("Includes.profile.profile")
 local Sprite0Scanline = require("NES.PPU.Sprite0Hack")
 local cpuRAM        = require("NES.CPU.cpuram")
 local controller    = require("NES.Controller.controller")
+local cheats        = require("Emulator.cheats")
 --* Global Variables
 LoveFileDir             = love.filesystem.getSourceBaseDirectory() .. "/" .. love.filesystem.getIdentity() .. "/"
 GlobalFileName          = love.filesystem.read("Emulator/nesEmuState.txt")
@@ -36,6 +37,7 @@ local MAX_CATCHUP_FRAMES = 4
 local lastDebugPPURefresh = 0
 
 local function RunEmulatedFrame()
+    cheats.ApplyRAM(cpuRAM.cpuRAM)
     loveSpeed.RecordCounter("emulatedFrames", 1)
     if Profile then profile.start() end
     local apuStart = love.timer.getTime()
@@ -43,6 +45,7 @@ local function RunEmulatedFrame()
     loveSpeed.RecordComponent("apu", love.timer.getTime() - apuStart)
     local cpuStart = love.timer.getTime()
     cpu.ExecuteCycles(NTSC_CPU_CYCLES)
+    cheats.ApplyRAM(cpuRAM.cpuRAM)
     local cpuElapsed = love.timer.getTime() - cpuStart
     loveSpeed.RecordComponent("cpuCore", cpuElapsed)
     loveSpeed.RecordComponent("cpu", cpuElapsed)
@@ -98,7 +101,9 @@ function love.update(dt)
             framesRun = framesRun + 1
         end
     elseif G_CPUStep == 1 then  --# 1 = 1 cycle at a time
+        cheats.ApplyRAM(cpuRAM.cpuRAM)
         cpu.ExecuteCycles(1)
+        cheats.ApplyRAM(cpuRAM.cpuRAM)
         G_CPUStep = 0
     end
 end
@@ -163,6 +168,7 @@ function love.keypressed(key, scancode, isrepeat)
         testing.ToggleHelp()
         return
     end
+    if testing.HandleKeyPressed and testing.HandleKeyPressed(key) then return end
     keyboard.HandleKeyPressed(key)
 end
 
@@ -208,6 +214,8 @@ function Initialize (file)
     end
     print(file)
     cart.Initialize(totalfile) --* setup for mappers --
+    cheats.LoadForCartridge()
+    cheats.ApplyROM(cart.ROM)
     print("mapper loaded:" .. cart.mapper)
     mapperEntry.mapper.INI()
     bus.RefreshMapperCache()  -- Cache mapper functions for hot-path optimization

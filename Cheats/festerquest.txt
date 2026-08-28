@@ -1,0 +1,5 @@
+# Fester's Quest (USA) - gun power / damage
+# RAM address:value entries are reapplied during emulation.
+04E7:04
+# Shared gun/whip damage ROM patch from the IPS: file offset 0x019D7E.
+ROM:019D7E:20

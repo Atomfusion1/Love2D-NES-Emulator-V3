@@ -223,6 +223,8 @@ function love.textinput(text)
                 break
             end
         end
+    else
+        require("Emulator.UI.Debug.testing").TextInput(text)
     end
 end
 

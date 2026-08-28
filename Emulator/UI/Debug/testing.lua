@@ -12,6 +12,9 @@ local displayTimer = require("Includes.displaytimer")
 local oam         = require("NES.PPU.ppuOAM")
 local loopy       = require("NES.PPU.loopy")
 local apu         = require("NES.Audio.apu")
+local cart        = require("NES.Cartridge.Cartridge")
+local controller  = require("NES.Controller.controller")
+local cheats      = require("Emulator.cheats")
 
 local testing = {}
 local holdingString = {}
@@ -20,14 +23,15 @@ DebugActiveTab = activeTab
 local ppuLayerRects = {}
 local ppuDiagnosticRects = {}
 local ppuDiagnosticMode = "live"
-local tabOrder = { "overview", "cpu", "ppu", "memory", "performance", "apu" }
+local tabOrder = { "overview", "cpu", "ppu", "memory", "performance", "apu", "cheats" }
 local tabLabels = {
     overview = "Overview",
     cpu = "CPU",
     ppu = "PPU",
     memory = "Memory",
     performance = "Performance",
-    apu = "APU"
+    apu = "APU",
+    cheats = "Cheats"
 }
 local toolbarButtons = {
     { id = "run", label = "Run" },
@@ -45,6 +49,10 @@ local memorySourceRects = {}
 local memoryNavRects = {}
 local performanceRects = {}
 local audioRects = {}
+local cheatInputRect = nil
+local cheatInput = ""
+local cheatInputActive = false
+local cheatRects = {}
 local nametableRect = nil
 local paletteCycleRect = nil
 local performanceFocus = "overall"
@@ -383,6 +391,107 @@ local function CPUExecutionInsight()
     drawButton("Set breakpoint (B)", 550, 720, 150, 26, false)
 end
 
+-- The Overview is intentionally a system snapshot rather than a shortened
+-- CPU page. Keep each section compact so it remains useful while the machine
+-- is running and so it can be read without switching between tabs.
+local function drawOverviewCard(title, x, y, width, height, rows)
+    love.graphics.setColor(0.04, 0.12, 0.17, 1)
+    love.graphics.rectangle("fill", x, y, width, height)
+    love.graphics.setColor(0.25, 0.68, 0.82, 1)
+    love.graphics.rectangle("line", x, y, width, height)
+    love.graphics.setColor(0.45, 0.85, 1, 1)
+    love.graphics.print(title, x + 12, y + 10)
+    local rowY = y + 34
+    for _, row in ipairs(rows) do
+        love.graphics.setColor(0.62, 0.74, 0.82, 1)
+        love.graphics.print(row[1], x + 12, rowY)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.printf(tostring(row[2]), x + width * 0.48, rowY, width * 0.45, "right")
+        rowY = rowY + 19
+    end
+end
+
+local function overviewMirrorName(value)
+    return ({ [0] = "Horizontal", [1] = "Vertical" })[value] or "Four-screen / other"
+end
+
+local function drawOverview()
+    local x, y = 552, 143
+    local gap, cardW = 14, 252
+    local cardH = 158
+    local header = cart.header or {}
+    local mapperNumber = cart.mapper == nil and "--" or string.format("%03d", cart.mapper)
+    local romName = cart.FileName and string.match(cart.FileName, "[^/\\]+$") or "No cartridge"
+    local dmc = apu.GetDMCDebugStatus()
+    local ppuStatus = ppuIO.STATUS or 0
+    local cpuFlags = string.format("N%d V%d I%d Z%d C%d", cpuMemory.GetFlag("negative"),
+        cpuMemory.GetFlag("overflow"), cpuMemory.GetFlag("interrupt"),
+        cpuMemory.GetFlag("zero"), cpuMemory.GetFlag("carry"))
+    local controller1 = controller.Controller1State or 0
+    local heldButtons = 0
+    for bitIndex = 0, 7 do
+        if bit.band(controller1, bit.lshift(1, bitIndex)) ~= 0 then heldButtons = heldButtons + 1 end
+    end
+
+    love.graphics.setColor(0.8, 0.9, 1, 1)
+    love.graphics.print("NES SYSTEM OVERVIEW", x, y - 28)
+    love.graphics.setColor(0.58, 0.7, 0.8, 1)
+    love.graphics.print(EmulationReady and "Cartridge loaded and emulation ready" or "Waiting for a cartridge", x, y - 8)
+
+    drawOverviewCard("CARTRIDGE", x, y, cardW, cardH, {
+        { "ROM", romName },
+        { "Mapper", mapperNumber },
+        { "PRG-ROM", string.format("%d KB", (header[4] or 0) * 16) },
+        { "CHR-ROM", string.format("%d KB", (header[5] or 0) * 8) },
+        { "Mirroring", overviewMirrorName(cart.Mirror) },
+        { "Battery RAM", bit.band(header[6] or 0, 0x02) ~= 0 and "Yes" or "No" }
+    })
+    drawOverviewCard("CPU / EXECUTION", x + cardW + gap, y, cardW, cardH, {
+        { "Mode", G_CPUStep == 0 and "Paused" or (G_CPUStep == 1 and "Single cycle" or "Running") },
+        { "PC", string.format("$%04X", cpuMemory.programCounter or 0) },
+        { "Registers", string.format("A:%02X X:%02X Y:%02X", cpuMemory.A or 0, cpuMemory.X or 0, cpuMemory.Y or 0) },
+        { "Stack", string.format("$%04X", 0x0100 + (cpuMemory.stackPointer or 0)) },
+        { "Flags", cpuFlags },
+        { "Breakpoint", UseBreakPoint and string.format("$%04X", BreakPointValue) or "None" }
+    })
+
+    y = y + cardH + gap
+    drawOverviewCard("PPU / VIDEO", x, y, cardW, cardH, {
+        { "Scanline", string.format("%d / 261", ppu.scanLines or 0) },
+        { "Pixel", string.format("%d", ppu.scanLinePixels or 0) },
+        { "VBlank", bit.band(ppuStatus, 0x80) ~= 0 and "Active" or "No" },
+        { "NMI", ppuIO.NMIArmed and "Armed" or "Off" },
+        { "Background", bit.band(ppuIO.MASKS or 0, 0x08) ~= 0 and "Enabled" or "Disabled" },
+        { "Sprites", bit.band(ppuIO.MASKS or 0, 0x10) ~= 0 and "Enabled" or "Disabled" }
+    })
+    drawOverviewCard("APU / SOUND", x + cardW + gap, y, cardW, cardH, {
+        { "Output", UseSound and "Enabled" or "Muted" },
+        { "Volume", string.format("%.1fx", VolumeMulti or 1) },
+        { "Channels", string.format("%d / 4 active", bit.band(apu.StatusRead(), 0x0F)) },
+        { "DMC", dmc.enabled and "Active" or "Idle" },
+        { "DMC bytes", dmc.bytesRemaining or 0 },
+        { "DMC output", dmc.outputLevel or apu.GetDMCOutput() or 0 }
+    })
+
+    y = y + cardH + gap
+    drawOverviewCard("MEMORY / INPUT", x, y, cardW, cardH, {
+        { "CPU RAM", "2 KB + mirrors" },
+        { "PPU address", string.format("$%04X", loopy.v or 0) },
+        { "OAM", string.format("$%02X", ppuIO.OAMADDR or 0) },
+        { "Controller 1", string.format("%d button%s held", heldButtons, heldButtons == 1 and "" or "s") },
+        { "Controller 2", string.format("$%02X", controller.Controller2State or 0) },
+        { "Open bus", "CPU mapped" }
+    })
+    drawOverviewCard("TIMING / DEBUG", x + cardW + gap, y, cardW, cardH, {
+        { "Display FPS", string.format("%.1f", love.timer.getFPS()) },
+        { "PPU timing", "3 dots / CPU cycle" },
+        { "PPU states", #loopy.ppuStates },
+        { "Profiler", Profile and "Enabled" or "Off" },
+        { "Debug tab", tabLabels[activeTab] },
+        { "Frame step", G_FrameStepRequested and "Pending" or "Ready" }
+    })
+end
+
 drawButton = function(label, x, y, width, height, selected)
     love.graphics.setColor(selected and 0.12 or 0.08, selected and 0.42 or 0.12, selected and 0.62 or 0.18, 1)
     love.graphics.rectangle("fill", x, y, width, height, 3, 3)
@@ -440,7 +549,7 @@ local function drawTabs()
     local y = 45
     tabRects = {}
     for _, id in ipairs(tabOrder) do
-        local width = id == "performance" and 105 or 75
+        local width = id == "performance" and 105 or (id == "cheats" and 80 or 75)
         tabRects[#tabRects + 1] = { id = id, x = x, y = y, width = width, height = 28 }
         drawButton(tabLabels[id], x, y, width, 28, activeTab == id)
         x = x + width + 5
@@ -748,6 +857,36 @@ function testing.MousePressed(x, y, button)
             end
         end
     end
+    if button == 1 and activeTab == "cheats" then
+        for _, rect in ipairs(cheatRects) do
+            if x >= rect.x and x <= rect.x + rect.width
+                and y >= rect.y and y <= rect.y + rect.height
+                and rect.action then
+                if rect.action == "cheatInput" then
+                    cheatInputActive = true
+                elseif rect.action == "cheatAdd" and cheatInput ~= "" then
+                    cheats.AddCode(cheatInput)
+                    cheatInput = ""
+                    cheatInputActive = false
+                elseif rect.action == "cheatMaster" then
+                    cheats.SetEnabled(not cheats.enabled)
+                elseif rect.action == "rapidA" then
+                    cheats.SetRapidButton("a", not cheats.IsRapidButtonEnabled("a"))
+                elseif rect.action == "rapidB" then
+                    cheats.SetRapidButton("b", not cheats.IsRapidButtonEnabled("b"))
+                elseif rect.action == "rapidRateDown" then
+                    cheats.SetRapidRate(cheats.GetRapidRate() - 1)
+                elseif rect.action == "rapidRateUp" then
+                    cheats.SetRapidRate(cheats.GetRapidRate() + 1)
+                elseif rect.action == "cheatToggle" then
+                    cheats.ToggleEntry(rect.index)
+                elseif rect.action == "cheatRemove" then
+                    cheats.RemoveEntry(rect.index)
+                end
+                return
+            end
+        end
+    end
     if button == 1 and activeTab == "ppu" and y >= 635 and y <= 670 then
         if x >= 1010 and x <= 1090 then
             ppu.SelectDebugState(-1)
@@ -768,6 +907,28 @@ function testing.MousePressed(x, y, button)
             return
         end
     end
+end
+
+function testing.TextInput(text)
+    if activeTab == "cheats" and cheatInputActive then
+        cheatInput = cheatInput .. text:upper()
+    end
+end
+
+function testing.HandleKeyPressed(key)
+    if activeTab ~= "cheats" or not cheatInputActive then return false end
+    if key == "backspace" then
+        cheatInput = cheatInput:sub(1, -2)
+    elseif key == "return" or key == "kpenter" then
+        if cheatInput ~= "" then cheats.AddGameGenie(cheatInput) end
+        cheatInput = ""
+        cheatInputActive = false
+    elseif key == "escape" then
+        cheatInputActive = false
+    else
+        return false
+    end
+    return true
 end
 
 local function drawKeySection(title, keys, startX, startY, bgR, bgG, bgB, titleR, titleG, titleB)
@@ -840,12 +1001,20 @@ function testing.DisplayUI()
         love.graphics.rectangle("fill", 10, 65, 256 * 2, 240 * 2)
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.rectangle("line", 10, 65, 256 * 2, 240 * 2)
-        if activeTab == "overview" or activeTab == "cpu" then
-            -- CPU trace/status panel belongs only to CPU-oriented tabs.
+        if activeTab == "overview" or activeTab == "cpu" or activeTab == "cheats" then
+            -- Overview and Cheats use the right-side debugger panel.
+            local panelX = 545
+            local panelY = (activeTab == "overview" or activeTab == "cheats") and (90 + screenYOffset) or (100 + screenYOffset)
+            local panelWidth = (activeTab == "overview" or activeTab == "cheats") and 530 or 350
+            local panelHeight = activeTab == "cpu" and 600 or (activeTab == "overview" and 570 or 300)
+            if activeTab == "overview" or activeTab == "cheats" then
+                love.graphics.setColor(0.025, 0.055, 0.075, 1)
+            else
+                love.graphics.setColor(.0, .4, .6, 1)
+            end
+            love.graphics.rectangle("fill", panelX, panelY, panelWidth, panelHeight)
             love.graphics.setColor(.2, .2, .2, 1)
-            love.graphics.rectangle("line", 545, 100 + screenYOffset, 350, activeTab == "cpu" and 600 or 250)
-            love.graphics.setColor(.0, .4, .6, 1)
-            love.graphics.rectangle("fill", 545, 100 + screenYOffset, 350, activeTab == "cpu" and 600 or 250)
+            love.graphics.rectangle("line", panelX, panelY, panelWidth, panelHeight)
         elseif activeTab == "ppu" then
             -- CHR panels belong only to the PPU tab.
             love.graphics.setColor(1, 1, 1, 1)
@@ -864,13 +1033,12 @@ function testing.DisplayUI()
         love.graphics.setColor(1,1,1,1)
         
         if activeTab == "overview" or activeTab == "cpu" then
-            -- Display CPU parameters, trace, and diagnostic keys
-            CPUParamaters()
-            DebugTrace()
             if activeTab == "overview" then
-                love.graphics.setColor(0.7, 0.8, 0.9, 1)
-                love.graphics.print("Use the toolbar or F1 for commands", 550, 350)
+                drawOverview()
             else
+                -- Display CPU parameters, trace, and diagnostic keys
+                CPUParamaters()
+                DebugTrace()
                 love.graphics.setColor(0.7, 0.8, 0.9, 1)
                 love.graphics.print("CPU trace: 32 instructions around the program counter", 550, 650)
                 CPUExecutionInsight()
@@ -959,6 +1127,59 @@ function testing.DisplayUI()
             love.graphics.print(string.format("DMC: %s  bytes: %d  addr: $%04X  output: %d",
                 dmcStatus.enabled and "ACTIVE" or "IDLE", dmcStatus.bytesRemaining,
                 dmcStatus.currentAddress, dmcStatus.outputLevel), 600, 355)
+        elseif activeTab == "cheats" then
+            love.graphics.setColor(0.75, 0.85, 0.95, 1)
+            love.graphics.print("Game Cheats", 600, 110)
+            love.graphics.setColor(1, 1, 1, 1)
+            love.graphics.print("Optional runtime patches for the currently loaded cartridge.", 600, 140)
+            cheatRects = {
+                { x = 600, y = 175, width = 280, height = 30, action = "cheatInput" },
+                { x = 890, y = 175, width = 90, height = 30, action = "cheatAdd" },
+                { x = 600, y = 220, width = 180, height = 30, action = "cheatMaster" },
+                { x = 795, y = 220, width = 100, height = 30, action = "rapidA" },
+                { x = 905, y = 220, width = 100, height = 30, action = "rapidB" },
+                { x = 600, y = 260, width = 55, height = 28, action = "rapidRateDown" },
+                { x = 855, y = 260, width = 55, height = 28, action = "rapidRateUp" }
+            }
+            cheatInputRect = cheatRects[1]
+            love.graphics.setColor(0.04, 0.12, 0.17, 1)
+            love.graphics.rectangle("fill", 600, 175, 280, 30)
+            love.graphics.setColor(0.45, 0.75, 0.9, 1)
+            love.graphics.rectangle("line", 600, 175, 280, 30)
+            love.graphics.setColor(1, 1, 1, 1)
+            love.graphics.print(cheatInput == "" and "Enter Game Genie code" or cheatInput, 610, 182)
+            drawButton("Add", 890, 175, 90, 30, false)
+            drawButton("All cheats: " .. (cheats.enabled and "ON" or "OFF"),
+                600, 220, 180, 30, cheats.enabled)
+            drawButton("Rapid A: " .. (cheats.IsRapidButtonEnabled("a") and "ON" or "OFF"),
+                795, 220, 100, 30, cheats.IsRapidButtonEnabled("a"))
+            drawButton("Rapid B: " .. (cheats.IsRapidButtonEnabled("b") and "ON" or "OFF"),
+                905, 220, 100, 30, cheats.IsRapidButtonEnabled("b"))
+            drawButton("Rate -", 600, 260, 55, 28, false)
+            drawButton("Rate +", 855, 260, 55, 28, false)
+            love.graphics.setColor(0.8, 0.9, 1, 1)
+            love.graphics.printf(string.format("Rapid cadence: %d/%d frames", cheats.GetRapidRate(), cheats.GetRapidRate()),
+                665, 266, 175, "center")
+            love.graphics.setColor(0.72, 0.82, 0.92, 1)
+            love.graphics.print("Add address:value, ROM:offset:value, or a 6/8-letter Game Genie code.", 600, 300)
+            local rowY = 330
+            cheatRects = { cheatRects[1], cheatRects[2], cheatRects[3], cheatRects[4], cheatRects[5], cheatRects[6], cheatRects[7] }
+            for index, entry in ipairs(cheats.GetEntries()) do
+                love.graphics.setColor(0.9, 0.85, 0.55, 1)
+                local label
+                if entry.physical then
+                    label = string.format("ROM:$%06X : $%02X", entry.offset, entry.value)
+                else
+                    label = string.format("$%04X : $%02X%s", entry.address, entry.value,
+                        entry.compare and string.format("  compare $%02X", entry.compare) or "")
+                end
+                cheatRects[#cheatRects + 1] = { x = 600, y = rowY - 4, width = 330, height = 22, action = "cheatToggle", index = index }
+                cheatRects[#cheatRects + 1] = { x = 940, y = rowY - 4, width = 55, height = 22, action = "cheatRemove", index = index }
+                love.graphics.setColor(0.9, 0.85, 0.55, 1)
+                love.graphics.print((entry.enabled and "[ON] " or "[OFF] ") .. label, 600, rowY)
+                drawButton("Remove", 940, rowY - 4, 55, 22, false)
+                rowY = rowY + 19
+            end
         elseif activeTab == "performance" then
             local stats = displayTimer.GetStats()
             love.graphics.setColor(0.75, 0.85, 0.95, 1)
