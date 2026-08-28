@@ -50,7 +50,7 @@ local gamesSprite0Offset = {
     },
     ["Roms/Simpsons - Bart vs. The Space Mutants, The.nes"] = {
         sprite0Offset = 0,
-        scanLineOffset = 0
+        scanLineOffset = 1
     },
     ["Roms/Tecmo Bowl (USA) (Rev 1).nes"] = {
         sprite0Offset = 5,
@@ -63,6 +63,10 @@ local gamesSprite0Offset = {
     ["Roms/SimpleParallaxDemo.nes"] = {
         sprite0Offset = 5,
         scanLineOffset = 3
+    },
+    ["Roms/Bad Dudes.nes"] = {
+        sprite0Offset = 0,
+        scanLineOffset = -1
     },
 }
 function Sprite0Hack:CheckForSprite0Hit(gameName)

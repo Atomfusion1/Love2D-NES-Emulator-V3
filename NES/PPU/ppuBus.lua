@@ -105,7 +105,19 @@ local CPURegisters = {
             ppuIO.BackgroundTable = bit.band(data, 0x10) ~= 0 and 1 or 0
             ppuIO.SpriteTable = bit.band(data, 0x08) ~= 0 and 1 or 0
             loopy:WriteControl(data)
-            if loopy.scanLine < 242  then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1, loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine, nil, nil, "$2000")) end
+            if loopy.scanLine < 242 then
+                local stateStart = loopy.scanLine - 1
+                local stateEnd = loopy.scanLine + 1
+                -- MMC1 games commonly use $2000 as a precise split control.
+                -- Do not let the neighboring-line coalescing move that split.
+                if cart.mapper == 1 then
+                    stateStart = loopy.scanLine
+                    stateEnd = loopy.scanLine
+                end
+                loopy:SearchPPUStatesInRangeAndReplace(
+                    stateStart, stateEnd,
+                    require("NES.PPU.ppu").GetPPUState(loopy.scanLine, nil, nil, "$2000"))
+            end
             if debugPPU2000 then print(string.format("%i, Write PPU 2000 nameX:%x nameY:%x BackGroundTable:%x SpriteTable:%x",
                 loopy.scanLine, loopy.nametable_x, loopy.nametable_y, ppuIO.BackgroundTable, ppuIO.SpriteTable)) end
             return nil

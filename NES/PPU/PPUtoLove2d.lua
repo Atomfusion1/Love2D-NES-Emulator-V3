@@ -10,6 +10,11 @@ local cart          = require("NES.Cartridge.Cartridge")
 
 local PPUtoLove2d = {}
 PPUtoLove2d.PointerArray = {}
+local frameOAM = OAM
+
+function PPUtoLove2d.SetFrameOAM(snapshot)
+    frameOAM = snapshot or OAM
+end
 
 local band, lshift, rshift,bor = bit.band,bit.lshift,bit.rshift, bit.bor
 local PPURead = bus.PPURead
@@ -45,7 +50,9 @@ function PPUtoLove2d.DrawCHR(array, CHRTileSet, offset)
     local NumberSprites = 64
     local spriteHeight = (NumberSprites == 64) and 8 or 16
     local colorOffset = G_ColorOffset
-    local image = loopy.ppuStates[offset].spriteTileSet
+    local selectedState = loopy.ppuStates[offset]
+    local image = (selectedState.mapperEvent and selectedState.mapperSpriteTileSet)
+        or selectedState.spriteTileSet
 
     for nTileY = 0, 15 do
         for nTileX = 0, 15 do
@@ -229,18 +236,25 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                     if not spritesWereEnabled then
                         sourceRow = 0
                     end
-                elseif state.trigger ~= "$2001" and state.trigger ~= "mapper" then
+                end
+                -- A merged state such as "$2000+mapper" still carries a
+                -- real scroll change. Apply its position fields, but keep
+                -- the mapper-selected CHR table chosen above.
+                if state.trigger ~= "$2001" and state.trigger ~= "mapper" then
                     nametableX, nametableY = state.namespace_x, state.namespace_y
                     coarseScrollX, coarseScrollY = state.offset_x, state.offset_y
                     fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
-                    tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
+                    if not state.mapperEvent then
+                        tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
+                    end
                     renderMirror = state.mapperMirror or state.mirror
                     baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
                     if state.is2006 then
                         -- $2006 supplies a new VRAM origin.  Battletoads and
                         -- similar games use this to restart drawing from the
-                        -- top of the newly selected scroll box.  Do not apply
-                        -- this to ordinary $2005/$2000 mid-frame changes.
+                        -- top of the newly selected scroll box. The saved
+                        -- address is the new viewport origin, so the first
+                        -- output row after the split starts at source row 0.
                         sourceRow = 0
                     end
                 end
@@ -305,7 +319,7 @@ end
 --# Draw Sprites Helper
 local function drawSpritePixels(ptrScreenBuffer, littleY, tileIndex, palette, x, flipH, flipV, spriteHeight, use8x16Sprites, tableBuffer, passSpritePattern)
     for fineY = 0, spriteHeight - 1 do
-        local actualFineY, tileID , spriteTable = getTileData(fineY, tileIndex, flipV, spriteHeight, use8x16Sprites, passSpritePattern)
+        local actualFineY, tileID, spriteTable = getTileData(fineY, tileIndex, flipV, spriteHeight, use8x16Sprites, passSpritePattern)
         local nAddress = spriteTable + tileID * 16 + actualFineY
         local tile_lsb = tableBuffer[nAddress]
         if tile_lsb == nil then return end
@@ -316,9 +330,9 @@ local function drawSpritePixels(ptrScreenBuffer, littleY, tileIndex, palette, x,
             tile_msb = rshift(tile_msb, 1)
             tile_lsb = rshift(tile_lsb, 1)
             local xIndex = x + (flipH and (7 - fineX) or fineX)
-            local yIndex = ((littleY) * 256) + fineY * 256
-            local pixelIndex = (xIndex + yIndex)
-            if pixel ~= 0 and pixelIndex < 61400 then -- If 0 ignore it (transparent) if at edge of screen also ignore it to protect the array size 
+            local yIndex = littleY * 256 + fineY * 256
+            local pixelIndex = xIndex + yIndex
+            if pixel ~= 0 and pixelIndex < 61400 then -- protect the buffer at the screen edge
                 Setup1DArray32(0x3F10 + palette * 4 + pixel, ptrScreenBuffer, pixelIndex)
             end
         end
@@ -327,7 +341,8 @@ end
 
 --# Draw Sprites Helper
 local function getSpriteData(spriteIndex)
-    return OAM[spriteIndex * 4 + 0], OAM[spriteIndex * 4 + 1], OAM[spriteIndex * 4 + 2], OAM[spriteIndex * 4 + 3]
+    return frameOAM[spriteIndex * 4 + 0], frameOAM[spriteIndex * 4 + 1],
+        frameOAM[spriteIndex * 4 + 2], frameOAM[spriteIndex * 4 + 3]
 end
 local function getSpriteAttributes(attributes)
     return band(attributes, 0x03), band(attributes, 0x40) > 0, band(attributes, 0x80) > 0
@@ -345,23 +360,22 @@ local function processSprite(ptrScreenBuffer, spriteIndex, spriteHeight, use8x16
     if scanLines <= 1 or scanLines > 239 then
         return
     end
-    local passTableBuffer = states[#states].spriteTileSet
+    local lastState = states[#states]
+    local passTableBuffer = (lastState.mapperEvent and lastState.mapperSpriteTileSet) or lastState.spriteTileSet
     local passSpritePattern = states[#states].spriteTable
-    
-    -- Iterate through states
+
     for i = 1, #states do
         local nextScanLine = states[i + 1] and states[i + 1].scanLine or 241
-        -- Check if scanLines is between the scanLine of the current state and the next state
         if scanLines >= states[i].scanLine and scanLines < nextScanLine then
-            -- Check the ACTUAL matching state, not stateFound=1
             if states[i].isDrawSprites == false then return end
-            passTableBuffer = states[i].spriteTileSet
+            passTableBuffer = (states[i].mapperEvent and states[i].mapperSpriteTileSet) or states[i].spriteTileSet
             passSpritePattern = states[i].spriteTable
-            break -- Exit loop
+            break
         end
     end
     local palette, flipH, flipV = getSpriteAttributes(attributes)
-    drawSpritePixels(ptrScreenBuffer, scanLines, tileIndex, palette, x, flipH, flipV, spriteHeight, use8x16Sprites, passTableBuffer, passSpritePattern)
+    drawSpritePixels(ptrScreenBuffer, scanLines, tileIndex, palette, x, flipH, flipV,
+        spriteHeight, use8x16Sprites, passTableBuffer, passSpritePattern)
 end
 
 local function getBit(number, position)
@@ -485,7 +499,8 @@ end
 function PPUtoLove2d.ScreenToNumbers(CHR1, CHR2)
     if loopy.ppuStates[1] == nil then return end
     local state = loopy.ppuStates[1]
-    local pattern = state.spriteTileSet
+    local pattern = (state.mapperEvent and state.mapperSpriteTileSet)
+        or state.spriteTileSet
     local patternBase = state.backgroundTable * 0x1000
     local patternImages = {}
     for palette = 0, 3 do

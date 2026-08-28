@@ -12,6 +12,7 @@ local mapper        = require("NES.Cartridge.Mappers")
 --! Entire PPU is a Hack Job and Needs to be reworked from the ground up but I am lazy and it works so i am not going to touch it
 local ppu             = {}
 local cachedTileSet   = nil
+local cachedTileSetId = 0
 ppu.memory            = {}
 ppu.Name              = {}
 ppu.Palette           = {}
@@ -23,6 +24,7 @@ ppu.currentFrame      = 1
 ppu.sprite0Offset     = 0
 ppu.scanLineOffset    = 0
 ppu.backgroundEnableOffset = 0
+ppu.frameOAM          = nil       -- OAM belonging to the frame being rendered
 
 
 ppu.scroll = {
@@ -167,7 +169,9 @@ function ppu.Reset()
     ppu.sprite0Offset = 0
     ppu.scanLineOffset = 0
     ppu.backgroundEnableOffset = 0
+    ppu.frameOAM = nil
     cachedTileSet = nil
+    cachedTileSetId = 0
 
     vBlankFlag = false
     scanLinePixels = 0
@@ -219,6 +223,14 @@ function ppu.Update(cpuCycles)
 
     if scanLines == 0 and scanLinePixels == 0 then
         ppu.clearPPUStates()
+        -- The CPU can update OAM during vblank before this frame is
+        -- presented. Keep the OAM used by the completed frame aligned with
+        -- its scanline/CHR snapshots instead of reading next-frame OAM live.
+        ppu.frameOAM = {}
+        for i = 0, 0xFF do
+            ppu.frameOAM[i] = OAM[i]
+        end
+        PPUtoLove.SetFrameOAM(ppu.frameOAM)
         ppu.DrawScreen = false
         if debug then
             print()
@@ -357,6 +369,7 @@ local function getCachedTileSet()
     if currentMapper.chrDirty or not cachedTileSet then
         local snapshotStart = love.timer.getTime()
         cachedTileSet = ppuBus.ppuBuffer(0, 0x1FFF)
+        cachedTileSetId = cachedTileSetId + 1
         currentMapper.chrDirty = false
         displayTimer.RecordComponent("ppuChrSnapshot", love.timer.getTime() - snapshotStart)
         displayTimer.RecordCounter("ppuChrCopies", 1)
@@ -387,7 +400,8 @@ function ppu.GetPPUState(scanLine, offset, is2006, trigger)
         offsetY             = offset or 0,
         is2006              = is2006 or false,
         trigger             = trigger or "unknown",
-        mapperEvent         = trigger == "mapper"
+        mapperEvent         = trigger == "mapper",
+        chrSnapshotId       = cachedTileSetId,
     }
     return state
 end
@@ -416,7 +430,8 @@ function ppu.savePPUStates(scanLine, offset, is2006, trigger)
         offsetY             = offset or 0,
         is2006              = is2006 or false,
         trigger             = trigger or "scanline",
-        mapperEvent         = trigger == "mapper"
+        mapperEvent         = trigger == "mapper",
+        chrSnapshotId       = cachedTileSetId,
     }
     table.insert(loopy.ppuStates, state)
     loopy.ppuStatesVersion = (loopy.ppuStatesVersion or 0) + 1

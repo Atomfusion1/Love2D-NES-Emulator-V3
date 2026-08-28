@@ -199,7 +199,14 @@ function loopy:SearchPPUStatesInRangeAndReplace(startScanLine, endScanLine, stat
     local mapperEvent = state.trigger == "mapper" or state.mapperEvent
     local mapperMerged = false
     for i = 1, #self.ppuStates do
-        if self.ppuStates[i].scanLine >= startScanLine and self.ppuStates[i].scanLine <= endScanLine then
+        local inRange = self.ppuStates[i].scanLine >= startScanLine
+            and self.ppuStates[i].scanLine <= endScanLine
+        -- Mapper CHR changes are ordered relative to scroll writes. Never
+        -- merge a mapper state from a neighboring scanline into a scroll
+        -- state; the +/-1 window is only safe for non-mapper bookkeeping.
+        local mapperOnDifferentLine = self.ppuStates[i].mapperEvent
+            and self.ppuStates[i].scanLine ~= state.scanLine
+        if inRange and not mapperOnDifferentLine then
             if not firstMatch then
                 firstMatch = i
                 -- Several register/mapper writes commonly form one split.
@@ -214,7 +221,17 @@ function loopy:SearchPPUStatesInRangeAndReplace(startScanLine, endScanLine, stat
                 -- this scanline instead of creating a second render state.
                 if self.ppuStates[i].mapperEvent and not mapperEvent then
                     state.mapperEvent = true
-                    state.mapperSpriteTileSet = self.ppuStates[i].spriteTileSet
+                    -- A later same-scanline state may already contain a newer
+                    -- CHR cache than the mapper state being merged into it.
+                    -- Keep the newest table; otherwise a stale mapper table
+                    -- can survive while the base state advances.
+                    if (state.chrSnapshotId or 0) >= (self.ppuStates[i].chrSnapshotId or 0) then
+                        state.mapperSpriteTileSet = state.spriteTileSet
+                        state.mapperCHRSnapshotId = state.chrSnapshotId
+                    else
+                        state.mapperSpriteTileSet = self.ppuStates[i].spriteTileSet
+                        state.mapperCHRSnapshotId = self.ppuStates[i].chrSnapshotId
+                    end
                     state.mapperMirror = self.ppuStates[i].mirror
                 elseif mapperEvent then
                     self.ppuStates[i].mapperEvent = true

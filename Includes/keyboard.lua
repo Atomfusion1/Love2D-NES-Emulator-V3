@@ -162,7 +162,7 @@ local keypressed = {
     ["l"] = function() 
         EnableDebug = not EnableDebug 
         if EnableDebug then
-            love.window.setMode(1600, 800)
+            love.window.setMode(1600, 1000)
         end
     end,
     ["k"] = function()

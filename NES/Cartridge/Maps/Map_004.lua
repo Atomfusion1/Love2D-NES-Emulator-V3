@@ -90,6 +90,24 @@ function mapper.CPURead(addr)
     return 0x00
 end
 local loopy = require("NES.PPU.loopy")
+
+-- MMC3 CHR writes are scanline-visible events.  A state is not necessarily
+-- already present at the write location (most frames only have the frame
+-- start and vblank states), so always insert/replace one rather than only
+-- updating an existing state.
+local function captureCHRState()
+    if loopy.scanLine >= 0 and loopy.scanLine < 240 then
+        local ppu = require("NES.PPU.ppu")
+        -- Do not use the normal +/-1 scanline coalescing here. Bad Dudes
+        -- changes horizontal scroll on one line and CHR banks on the next;
+        -- merging those events loses their ordering.
+        loopy:SearchPPUStatesInRangeAndReplace(
+            loopy.scanLine,
+            loopy.scanLine,
+            ppu.GetPPUState(loopy.scanLine, nil, false, "mapper"))
+    end
+end
+
 function mapper.CPUWrite(addr, data)
     -- Implement CPUWrite functionality
     --print(string.format("addr: %x data: %x",addr,data))
@@ -100,43 +118,48 @@ function mapper.CPUWrite(addr, data)
         if value == 0 then
             local newPrgBankMode = bit.rshift(bit.band(data,0x40),6)
             local newChrBankMode = bit.rshift(bit.band(data,0x80),7)
-            if newChrBankMode ~= chrBankMode then
+            local chrModeChanged = newChrBankMode ~= chrBankMode
+            if chrModeChanged then
                 mapper.chrDirty = true
             end
             prgBankMode = newPrgBankMode
             chrBankMode = newChrBankMode
             bankSelect = bit.band(data,0x07)
             
-            -- Capture PPU state at this scanline for mid-frame CHR mode changes
-            if loopy.scanLine < 240 and loopy:SearchPPUStatesInRange(loopy.scanLine - 1, loopy.scanLine + 1) then
-                loopy:SearchPPUStatesInRangeAndReplace(
-                    loopy.scanLine - 1,
-                    loopy.scanLine + 1,
-                    require("NES.PPU.ppu").GetPPUState(loopy.scanLine)
-                )
+            -- A bank-select write alone does not change the active CHR
+            -- mapping.  Capture only when the CHR mode actually changes.
+            if chrModeChanged then
+                captureCHRState()
             end
         else
+            local chrChanged = false
             if bankSelect == 0 then
                 local newBank = bit.band(data,0xFFFE)
-                if newBank ~= CHRBank0a then mapper.chrDirty = true end
+                chrChanged = newBank ~= CHRBank0a
+                if chrChanged then mapper.chrDirty = true end
                 CHRBank0a = newBank
                 CHRBank0b = newBank + 1
             elseif bankSelect == 1 then
                 local newBank = bit.band(data,0xFFFE)
-                if newBank ~= CHRBank1a then mapper.chrDirty = true end
+                chrChanged = newBank ~= CHRBank1a
+                if chrChanged then mapper.chrDirty = true end
                 CHRBank1a = newBank
                 CHRBank1b = newBank + 1
             elseif bankSelect == 2 then
-                if data ~= CHRBank2 then mapper.chrDirty = true end
+                chrChanged = data ~= CHRBank2
+                if chrChanged then mapper.chrDirty = true end
                 CHRBank2 = data
             elseif bankSelect == 3 then
-                if data ~= CHRBank3 then mapper.chrDirty = true end
+                chrChanged = data ~= CHRBank3
+                if chrChanged then mapper.chrDirty = true end
                 CHRBank3 = data
             elseif bankSelect == 4 then
-                if data ~= CHRBank4 then mapper.chrDirty = true end
+                chrChanged = data ~= CHRBank4
+                if chrChanged then mapper.chrDirty = true end
                 CHRBank4 = data
             elseif bankSelect == 5 then
-                if data ~= CHRBank5 then mapper.chrDirty = true end
+                chrChanged = data ~= CHRBank5
+                if chrChanged then mapper.chrDirty = true end
                 CHRBank5 = data
             elseif bankSelect == 6 then
                 PRGBank6 = data
@@ -146,7 +169,11 @@ function mapper.CPUWrite(addr, data)
                 --print("prgbank7 "..PRGBank7 )
             end
             --print("BankSelect "..bankSelect.." data "..data)
-            if loopy.scanLine < 240 and loopy:SearchPPUStatesInRange(loopy.scanLine -1, loopy.scanLine +1) then loopy:SearchPPUStatesInRangeAndReplace( loopy.scanLine -1, loopy.scanLine +1, require("NES.PPU.ppu").GetPPUState(loopy.scanLine)) end
+            if chrChanged then
+                -- Capture the CHR mapping even when this scanline has no
+                -- prior saved state.
+                captureCHRState()
+            end
         end
     elseif addr >= 0xA000 and addr < 0xC000 then
         local value = bit.band(addr,0x0001)
