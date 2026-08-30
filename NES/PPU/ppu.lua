@@ -54,6 +54,7 @@ ppu.DrawScreen = false
 -- Debugger-only layer visibility. These flags never alter emulation state.
 ppu.debugShowBackground = true
 ppu.debugShowSprites = true
+ppu.debugShowOAMBoxes = false
 ppu.debugInspectionScanline = 0
 ppu.debugInspectionEnabled = false
 ppu.debugInspectionState = nil
@@ -64,6 +65,15 @@ end
 
 function ppu.ToggleDebugSprites()
     ppu.debugShowSprites = not ppu.debugShowSprites
+end
+
+function ppu.ToggleOAMBoxes()
+    ppu.debugShowOAMBoxes = not ppu.debugShowOAMBoxes
+    return ppu.debugShowOAMBoxes
+end
+
+function ppu.GetOAMBoxesEnabled()
+    return ppu.debugShowOAMBoxes
 end
 
 function ppu.AdjustDebugInspectionScanline(delta)

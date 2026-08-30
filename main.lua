@@ -113,6 +113,9 @@ function love.draw()
     DebugDraw()                 --* Debug Tiles and Window 
     if EmulationReady then
         pputolove.GameWindow()
+        if ppu.GetOAMBoxesEnabled() then
+            pputolove.DrawOAMBoxes()
+        end
     end
     -- Draw modal help last so the game image cannot cover it.
     testing.DrawHelpOverlay()
@@ -169,6 +172,11 @@ function love.keypressed(key, scancode, isrepeat)
         return
     end
     if testing.HandleKeyPressed and testing.HandleKeyPressed(key) then return end
+    if key == "f3" then
+        local enabled = ppu.ToggleOAMBoxes()
+        print("OAM 8x8 boxes: " .. (enabled and "on" or "off"))
+        return
+    end
     keyboard.HandleKeyPressed(key)
 end
 

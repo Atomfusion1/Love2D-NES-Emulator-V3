@@ -635,4 +635,47 @@ function PPUtoLove2d.GameWindow()
     end
 end
 
+-- Draw one raw 8x8 box for each visible sprite in the completed frame's OAM.
+-- These are sprite bounds, not the game's actual collision boxes.
+function PPUtoLove2d.DrawOAMBoxes()
+    local screenScale = 2
+    local screenX = 0
+    local screenY = 15
+
+    if not EnableDebug then
+        screenScale = math.floor(love.graphics.getHeight() / 240)
+        if screenScale < 1 then screenScale = 1 end
+        local scaledW = screenImage:getWidth() * screenScale
+        local scaledH = screenImage:getHeight() * screenScale
+        screenX = math.floor((love.graphics.getWidth() - scaledW) / 2)
+        screenY = math.floor((love.graphics.getHeight() - scaledH) / 2)
+    else
+        screenX = 10
+        screenY = 65
+    end
+
+    love.graphics.setLineWidth(math.max(1, screenScale))
+    love.graphics.setColor(1, 0.15, 0.1, 0.9)
+
+    for sprite = 0, 63 do
+        local offset = sprite * 4
+        local y = (frameOAM[offset] or 0xF8) + 1
+        local x = frameOAM[offset + 3] or 0xFF
+
+        -- OAM Y is one less than the sprite's visible top edge.
+        if y < 240 and x < 256 then
+            love.graphics.rectangle(
+                "line",
+                screenX + x * screenScale,
+                screenY + y * screenScale,
+                8 * screenScale,
+                8 * screenScale
+            )
+        end
+    end
+
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setLineWidth(1)
+end
+
 return PPUtoLove2d
