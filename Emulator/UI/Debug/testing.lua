@@ -1200,6 +1200,24 @@ function testing.DisplayUI()
                 chrCopyValues[#chrCopyValues] or 0,
                 (chrTimeValues[#chrTimeValues] or 0) * 1000,
                 stats.memoryDropKB or 0), 800, 205)
+            local function latestComponentMs(name)
+                local values = stats.components[name] or {}
+                return (values[#values] or 0) * 1000
+            end
+            local function latestCounter(name)
+                local values = stats.counters[name] or {}
+                return values[#values] or 0
+            end
+            love.graphics.print(string.format(
+                "Last NES frame: CPU path %.2f  instr %.2f  reads %.2f  PPU emu %.2f  PPU draw %.2f ms",
+                latestComponentMs("cpu"), latestComponentMs("cpuInstruction"),
+                latestComponentMs("cpuRead"), latestComponentMs("ppuEmu"),
+                latestComponentMs("ppu")), 600, 278)
+            love.graphics.print(string.format(
+                "Counts: CPU instr %d  reads %d  PPU updates %d  Love2D draw %.2f ms (avg %.2f)",
+                latestCounter("cpuInstructions"), latestCounter("cpuReads"),
+                latestCounter("ppuUpdateCalls"), stats.love2dDraw.current * 1000,
+                stats.love2dDraw.average * 1000), 600, 296)
             performanceRects = {
                 { x = 600, y = 225, width = 130, height = 26, action = "reset" },
                 { x = 745, y = 225, width = 105, height = 26, action = "overall" },
@@ -1215,7 +1233,7 @@ function testing.DisplayUI()
             love.graphics.setColor(0.7, 0.82, 0.92, 1)
             love.graphics.print(string.format("Selected: %s  %.2f ms", focusName, (focusValue or 0) * 1000), 600, 260)
 
-            local graphX, graphY, graphW, graphH = 600, 285, 560, 220
+            local graphX, graphY, graphW, graphH = 600, 315, 560, 200
             local graphValues = stats.samples
             if performanceFocus == "cpu" then graphValues = stats.components.cpuCore end
             if performanceFocus == "ppu" then graphValues = stats.components.ppu end
@@ -1249,6 +1267,8 @@ function testing.DisplayUI()
                 if performanceFocus == "cpu" then
                     series = {
                         { label = "CPU core", values = stats.components.cpuCore, color = { 1, 0.65, 0.3, 1 } },
+                        { label = "Instructions", values = stats.components.cpuInstruction, color = { 0.95, 0.85, 0.25, 1 } },
+                        { label = "Reads", values = stats.components.cpuRead, color = { 0.85, 0.55, 1, 1 } },
                         { label = "APU", values = stats.components.apu, color = { 1, 0.35, 0.6, 1 } },
                         { label = "PPU emu", values = stats.components.ppuEmu, color = { 0.75, 0.5, 1, 1 } }
                     }
@@ -1297,6 +1317,8 @@ function testing.DisplayUI()
             if performanceFocus == "cpu" then
                 legend = {
                     { label = "CPU core", color = { 1, 0.65, 0.3, 1 } },
+                    { label = "Instructions", color = { 0.95, 0.85, 0.25, 1 } },
+                    { label = "Reads", color = { 0.85, 0.55, 1, 1 } },
                     { label = "APU", color = { 1, 0.35, 0.6, 1 } },
                     { label = "PPU emu", color = { 0.75, 0.5, 1, 1 } }
                 }
@@ -1314,6 +1336,9 @@ function testing.DisplayUI()
             if performanceFocus == "ppu" then
                 legendX = graphX + 135
                 legendStep = 70
+            elseif performanceFocus == "cpu" then
+                legendX = graphX + 90
+                legendStep = 95
             end
             for _, item in ipairs(legend) do
                 love.graphics.setColor(unpack(item.color))

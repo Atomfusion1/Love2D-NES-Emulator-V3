@@ -16,6 +16,7 @@ local cachedMapper
 local cachedMapperCPURead
 local cachedMapperCPUWrite
 local cachedMapperCheckIRQ
+local cpuReadProfiler
 -- CPU data-bus latch used by unmapped/open-bus reads.  Operand fetches and
 -- ordinary mapped reads naturally update it; an open-bus read leaves it
 -- unchanged, matching the 2A03 bus behavior.
@@ -44,7 +45,7 @@ function bus.RefreshMapperCache()
 end
 
 --# CPU BUS READ 
-function bus.CPURead(addr)
+local function CPUReadImpl(addr)
     local mapperRead = cachedMapperCPURead
     if not mapperRead then
         bus.RefreshMapperCache()
@@ -87,6 +88,20 @@ function bus.CPURead(addr)
         print(string.format("CPU Error Read not Mapped %x", addr))
         return cpuOpenBus
     end
+end
+
+-- Optional detailed profiler hook.  The normal CPU path calls CPUReadImpl
+-- directly through this wrapper, while the performance panel can install a
+-- sampled callback for one emulated frame without changing read behavior.
+function bus.SetCPUReadProfiler(profiler)
+    cpuReadProfiler = profiler
+end
+
+function bus.CPURead(addr)
+    if cpuReadProfiler then
+        return cpuReadProfiler(addr, CPUReadImpl)
+    end
+    return CPUReadImpl(addr)
 end
 
 -- Debugger-only CPU read that never invokes register read side effects.

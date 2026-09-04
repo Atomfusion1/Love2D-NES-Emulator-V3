@@ -119,6 +119,7 @@ end
 
 --& Draw Screen
 function love.draw()
+    local love2dDrawStart = love.timer.getTime()
     DebugDraw()                 --* Debug Tiles and Window 
     if EmulationReady then
         pputolove.GameWindow()
@@ -130,6 +131,7 @@ function love.draw()
     testing.DrawHelpOverlay()
     selectFile.DrawPopup()
     loveSpeed.DisplayScreen()   --* Display us Timer 
+    loveSpeed.RecordLove2DFrame(love.timer.getTime() - love2dDrawStart)
     cpu.drawFrame = false
 end
 

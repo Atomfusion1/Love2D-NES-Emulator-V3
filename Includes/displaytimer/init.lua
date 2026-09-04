@@ -19,10 +19,10 @@ local maxFUT1 = 0.0
 local maxFUTTime = 0
 local metricsFont = nil
 local frameSamples = {}
-local componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {}, ppuChrSnapshot = {}, ppuDebug = {} }
+local componentSamples = { cpu = {}, cpuCore = {}, cpuInstruction = {}, cpuRead = {}, apu = {}, ppuEmu = {}, ppu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {}, ppuChrSnapshot = {}, ppuDebug = {} }
 local pendingComponents = {}
 local eventComponents = { ppuChrSnapshot = true, ppuDebug = true }
-local counterSamples = { ppuChrCopies = {} }
+local counterSamples = { ppuChrCopies = {}, cpuInstructions = {}, cpuReads = {}, ppuUpdateCalls = {} }
 local pendingCounters = {}
 local memoryDeltaSamples = {}
 local memoryDropSamples = {}
@@ -32,6 +32,9 @@ local frameSampleIndex = 0
 local frameSampleCount = 0
 local totalFrameSamples = 0
 local FRAME_SAMPLE_LIMIT = 600
+local love2dDrawCurrent = 0.0
+local love2dDrawAverage = 0.0
+local love2dDrawSamples = 0
 
 --# Start the timer
 function displayTimer.StartTimer()
@@ -98,6 +101,18 @@ function displayTimer.RecordEmulatedFrame(elapsed)
     pendingCounters = {}
 end
 
+-- Love2D presentation runs on the display refresh, which can be a different
+-- rate from the NES frame rate.  Keep it as a separate stream instead of
+-- mixing it into the emulated-frame graph.
+function displayTimer.RecordLove2DFrame(elapsed)
+    love2dDrawCurrent = math.max(0, elapsed or 0)
+    love2dDrawSamples = love2dDrawSamples + 1
+    local alphaValue = 0.05
+    love2dDrawAverage = love2dDrawAverage == 0
+        and love2dDrawCurrent
+        or alphaValue * love2dDrawCurrent + (1 - alphaValue) * love2dDrawAverage
+end
+
 function displayTimer.DisplayScreen()
     UpdateScreenValues()
     DrawPerformanceMetrics()
@@ -117,12 +132,15 @@ function displayTimer.ResetStats()
     maxFUTTime = 0
     emulatedFPS = 0.0
     lastEmulatedSampleTime = nil
+    love2dDrawCurrent = 0.0
+    love2dDrawAverage = 0.0
+    love2dDrawSamples = 0
     frameSampleIndex = 0
     frameSampleCount = 0
     frameSamples = {}
-    componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {}, ppuChrSnapshot = {}, ppuDebug = {} }
+    componentSamples = { cpu = {}, cpuCore = {}, cpuInstruction = {}, cpuRead = {}, apu = {}, ppuEmu = {}, ppu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {}, ppuChrSnapshot = {}, ppuDebug = {} }
     pendingComponents = {}
-    counterSamples = { ppuChrCopies = {} }
+    counterSamples = { ppuChrCopies = {}, cpuInstructions = {}, cpuReads = {}, ppuUpdateCalls = {} }
     pendingCounters = {}
     memoryDeltaSamples = {}
     memoryDropSamples = {}
@@ -206,7 +224,12 @@ function displayTimer.GetStats()
         totalFrameSamples = totalFrameSamples,
         samples = samples,
         components = components,
-        counters = counters
+        counters = counters,
+        love2dDraw = {
+            current = love2dDrawCurrent,
+            average = love2dDrawAverage,
+            samples = love2dDrawSamples
+        }
     }
 end
 

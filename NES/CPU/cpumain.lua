@@ -18,6 +18,7 @@ local APUClock = apu.Clock
 local CheckIRQ = bus.CheckIRQ
 local TakeOAMDMARequest = bus.TakeOAMDMARequest
 local RefreshOAM = OAM.RefreshOAM
+local SetCPUReadProfiler = bus.SetCPUReadProfiler
 local debugCPU = false
 cpu.drawFrame = false
 cpu.totalCycles = 4
@@ -138,7 +139,8 @@ end
 function cpu.ExecuteCycles(totalCycles)
     local cycleCount = 0
     local opcode, opTable, pcStep, cycleCost, results
-    local ppuCycleDebt = 0  -- Batch PPU updates with threshold of 16
+    local ppuCycleDebt = 0  -- Batch PPU updates with a small timing-safe threshold
+    local PPU_UPDATE_THRESHOLD = 114
     
     -- Localize hot-path functions to avoid table lookups
     local PPUUpdate = ppu.Update
@@ -147,6 +149,41 @@ function cpu.ExecuteCycles(totalCycles)
     local ppuTimingCalls = 0
     local ppuTimingSamples = 0
     local ppuTimingElapsed = 0
+    local instructionCount = 0
+    local instructionSamples = 0
+    local instructionElapsed = 0
+    local cpuReadCount = 0
+    local cpuReadSamples = 0
+    local cpuReadElapsed = 0
+
+    local function profiledCPURead(addr, read)
+        cpuReadCount = cpuReadCount + 1
+        local sampleThisRead = band(cpuReadCount, 0x7F) == 1
+        if sampleThisRead then
+            local readStart = love.timer.getTime()
+            local value = read(addr)
+            cpuReadElapsed = cpuReadElapsed + love.timer.getTime() - readStart
+            cpuReadSamples = cpuReadSamples + 1
+            return value
+        end
+        return read(addr)
+    end
+
+    local function updatePPU(cycles)
+        ppuTimingCalls = ppuTimingCalls + 1
+        local sampleThisCall = detailEnabled and band(ppuTimingCalls, 0x7F) == 1
+        local ppuEmuStart = sampleThisCall and love.timer.getTime() or 0
+        local ppuContinues = PPUUpdate(cycles)
+        if sampleThisCall then
+            ppuTimingElapsed = ppuTimingElapsed + love.timer.getTime() - ppuEmuStart
+            ppuTimingSamples = ppuTimingSamples + 1
+        end
+        return ppuContinues
+    end
+
+    if detailEnabled then
+        SetCPUReadProfiler(profiledCPURead)
+    end
 
     while totalCycles > cycleCount do
         -- Reset PPU with CPU
@@ -174,7 +211,7 @@ function cpu.ExecuteCycles(totalCycles)
             ppuCycleDebt = ppuCycleDebt + interruptCycles
             
             if ppuCycleDebt >= 1024 then
-                if not PPUUpdate(ppuCycleDebt) then
+                if not updatePPU(ppuCycleDebt) then
                     cpu.drawFrame = true
                     totalCycles = 0
                 end
@@ -189,6 +226,10 @@ function cpu.ExecuteCycles(totalCycles)
 
             -- Fetch opcode
             opcode = CPURead(cpuInternal.programCounter)
+            instructionCount = instructionCount + 1
+            local instructionStart = detailEnabled
+                and band(instructionCount, 0x7F) == 1
+                and love.timer.getTime() or 0
             if opcode == 0x00 then  -- Handle BRK directly if opcode is 0x00
                 cycleCost = DoBRK()
                 pcStep = 0  -- PC already set to interrupt vector by DoBRK()
@@ -196,6 +237,10 @@ function cpu.ExecuteCycles(totalCycles)
                 -- Execute normal opcode (using localized function)
                 results, pcStep, cycleCost = ExecuteOpcode(opcode)
                 cpuInternal.programCounter = band(cpuInternal.programCounter + pcStep, 0xFFFF)
+            end
+            if instructionStart ~= 0 then
+                instructionElapsed = instructionElapsed + love.timer.getTime() - instructionStart
+                instructionSamples = instructionSamples + 1
             end
 
             -- Update cycle count and debug information
@@ -208,16 +253,10 @@ function cpu.ExecuteCycles(totalCycles)
                 TraceLogger()
             end
 
-            -- Batch PPU updates with threshold of 16 cycles
-            if ppuCycleDebt >= 1 then
-                ppuTimingCalls = ppuTimingCalls + 1
-                local sampleThisCall = detailEnabled and band(ppuTimingCalls, 0x7F) == 1
-                local ppuEmuStart = sampleThisCall and love.timer.getTime() or 0
-                local ppuContinues = PPUUpdate(ppuCycleDebt)
-                if sampleThisCall then
-                    ppuTimingElapsed = ppuTimingElapsed + love.timer.getTime() - ppuEmuStart
-                    ppuTimingSamples = ppuTimingSamples + 1
-                end
+            -- Batch ordinary PPU updates in small groups. DMA keeps its
+            -- immediate update below because its stall timing is sensitive.
+            if ppuCycleDebt >= PPU_UPDATE_THRESHOLD then
+                local ppuContinues = updatePPU(ppuCycleDebt)
                 if not ppuContinues then
                     cpu.drawFrame = true
                     totalCycles = 0
@@ -241,7 +280,7 @@ function cpu.ExecuteCycles(totalCycles)
                 ppuCycleDebt = ppuCycleDebt + dmaCycles
 
                 if ppuCycleDebt >= 1 then
-                    if not PPUUpdate(ppuCycleDebt) then
+                    if not updatePPU(ppuCycleDebt) then
                         cpu.drawFrame = true
                         totalCycles = 0
                     end
@@ -251,9 +290,33 @@ function cpu.ExecuteCycles(totalCycles)
         end
     end
 
-    if detailEnabled and ppuTimingSamples > 0 then
-        local estimatedPPUTime = ppuTimingElapsed * ppuTimingCalls / ppuTimingSamples
-        displayTimer.RecordComponent("ppuEmu", estimatedPPUTime)
+    -- Do not discard a partial batch when the requested CPU budget ends.
+    -- This is normally only 1-3 CPU cycles with the threshold set to 4, but
+    -- those cycles still need to advance the PPU before the next frame.
+    if ppuCycleDebt > 0 then
+        if not updatePPU(ppuCycleDebt) then
+            cpu.drawFrame = true
+        end
+    end
+
+    if detailEnabled then
+        SetCPUReadProfiler(nil)
+        if ppuTimingSamples > 0 then
+            local estimatedPPUTime = ppuTimingElapsed * ppuTimingCalls / ppuTimingSamples
+            displayTimer.RecordComponent("ppuEmu", estimatedPPUTime)
+        end
+        if instructionSamples > 0 then
+            local estimatedInstructionTime = instructionElapsed
+                * instructionCount / instructionSamples
+            displayTimer.RecordComponent("cpuInstruction", estimatedInstructionTime)
+        end
+        if cpuReadSamples > 0 then
+            local estimatedReadTime = cpuReadElapsed * cpuReadCount / cpuReadSamples
+            displayTimer.RecordComponent("cpuRead", estimatedReadTime)
+        end
+        displayTimer.RecordCounter("cpuInstructions", instructionCount)
+        displayTimer.RecordCounter("cpuReads", cpuReadCount)
+        displayTimer.RecordCounter("ppuUpdateCalls", ppuTimingCalls)
     end
 
 end
