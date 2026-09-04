@@ -352,7 +352,6 @@ function ppu.Update(cpuCycles)
                 ppuIO.NMIArmed = nmiArmed
                 loopy.scanLine = 261
                 loopy.scanLinePixels = 341
-                ppu.StartGameWindow()
                 ppu.currentFrame = ppu.currentFrame + 1
                 if debug then print("End Of Frame") end
                 return false

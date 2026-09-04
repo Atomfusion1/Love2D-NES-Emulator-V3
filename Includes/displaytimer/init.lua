@@ -12,6 +12,8 @@ local lastFrameTime = 0
 displayTimer.isDelaySkipped = true
 local currentAverage = 0.0
 local alpha = 0.01  -- This is the smoothing factor, usually a small value
+local emulatedFPS = 0.0
+local lastEmulatedSampleTime = nil
 local maxFUT = 0.0
 local maxFUT1 = 0.0
 local maxFUTTime = 0
@@ -19,7 +21,6 @@ local metricsFont = nil
 local frameSamples = {}
 local componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {}, ppuChrSnapshot = {}, ppuDebug = {} }
 local pendingComponents = {}
-local lastComponentValues = { cpu = 0, ppu = 0 }
 local eventComponents = { ppuChrSnapshot = true, ppuDebug = true }
 local counterSamples = { ppuChrCopies = {} }
 local pendingCounters = {}
@@ -57,24 +58,30 @@ local function UpdateFUT(newValue)
 end
 
 --# Display performance metrics on the screen
-function displayTimer.DisplayScreen()
-    cycleTime = love.timer.getTime() - timerForFPS  -- This timer is the amount of time it takes to update and draw the next screen
+function displayTimer.RecordEmulatedFrame(elapsed)
+    local now = love.timer.getTime()
+    cycleTime = math.max(0, elapsed or 0)
     UpdateRunningAverage(cycleTime)
     UpdateFUT(cycleTime)
+    if lastEmulatedSampleTime then
+        local interval = now - lastEmulatedSampleTime
+        if interval > 0 then
+            emulatedFPS = 1 / interval
+        end
+    end
+    lastEmulatedSampleTime = now
+
     frameSampleIndex = frameSampleIndex % FRAME_SAMPLE_LIMIT + 1
     totalFrameSamples = totalFrameSamples + 1
     frameNumberSamples[frameSampleIndex] = totalFrameSamples
-    frameSamples[frameSampleIndex] = math.max(0, cycleTime)
+    frameSamples[frameSampleIndex] = cycleTime
     for name, samples in pairs(componentSamples) do
         if eventComponents[name] then
             samples[frameSampleIndex] = math.max(0, pendingComponents[name] or 0)
         elseif pendingComponents[name] then
-            lastComponentValues[name] = math.max(0, pendingComponents[name])
-            samples[frameSampleIndex] = lastComponentValues[name]
+            samples[frameSampleIndex] = math.max(0, pendingComponents[name])
         else
-            -- A render component may not run on every presentation callback.
-            -- Keep its last measurement instead of drawing a false zero dip.
-            samples[frameSampleIndex] = lastComponentValues[name] or 0
+            samples[frameSampleIndex] = 0
         end
     end
     for name, samples in pairs(counterSamples) do
@@ -85,12 +92,20 @@ function displayTimer.DisplayScreen()
     memoryDeltaSamples[frameSampleIndex] = memoryDeltaKB
     memoryDropSamples[frameSampleIndex] = math.max(0, -memoryDeltaKB)
     previousMemoryKB = memoryKB
+    frameSampleCount = math.min(frameSampleCount + 1, FRAME_SAMPLE_LIMIT)
+
     pendingComponents = {}
     pendingCounters = {}
-    frameSampleCount = math.min(frameSampleCount + 1, FRAME_SAMPLE_LIMIT)
+end
+
+function displayTimer.DisplayScreen()
     UpdateScreenValues()
     DrawPerformanceMetrics()
     DelayScreen()
+    -- Presentation-only diagnostics belong to the display callback, not to
+    -- the next emulated-frame sample.
+    pendingComponents = {}
+    pendingCounters = {}
     timerForFPS = love.timer.getTime()              -- This timer is the amount of time it takes to update and draw the next screen before delay for next frame
 end
 
@@ -100,12 +115,13 @@ function displayTimer.ResetStats()
     maxFUT = 0
     maxFUT1 = 0
     maxFUTTime = 0
+    emulatedFPS = 0.0
+    lastEmulatedSampleTime = nil
     frameSampleIndex = 0
     frameSampleCount = 0
     frameSamples = {}
     componentSamples = { cpu = {}, ppu = {}, cpuCore = {}, apu = {}, ppuEmu = {}, ppuSetup = {}, ppuBackground = {}, ppuSprites = {}, ppuUpload = {}, ppuChrSnapshot = {}, ppuDebug = {} }
     pendingComponents = {}
-    lastComponentValues = { cpu = 0, ppu = 0 }
     counterSamples = { ppuChrCopies = {} }
     pendingCounters = {}
     memoryDeltaSamples = {}
@@ -175,19 +191,12 @@ function displayTimer.GetStats()
         latestMemoryDeltaKB = memoryDeltaSamples[frameSampleIndex] or 0
         latestMemoryDropKB = memoryDropSamples[frameSampleIndex] or 0
     end
-    -- Component timings can be captured on a slightly different emulation
-    -- callback boundary than the presentation timer. Keep the displayed
-    -- overall series as an upper bound so it cannot visually fall below a
-    -- measured CPU or PPU contribution.
-    for i = 1, frameSampleCount do
-        samples[i] = math.max(samples[i] or 0, components.cpu[i] or 0, components.ppu[i] or 0)
-    end
     return {
         current = math.max(0, cycleTime),
         average = frameSampleCount > 0 and total / frameSampleCount or 0,
         peak = maxFUT,
         onePercentLow = onePercentLow,
-        fps = love.timer.getFPS(),
+        fps = emulatedFPS,
         memoryMB = collectgarbage("count") / 1024,
         memoryDeltaKB = latestMemoryDeltaKB,
         memoryDropKB = latestMemoryDropKB,

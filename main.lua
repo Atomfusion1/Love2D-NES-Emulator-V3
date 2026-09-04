@@ -37,6 +37,7 @@ local MAX_CATCHUP_FRAMES = 4
 local lastDebugPPURefresh = 0
 
 local function RunEmulatedFrame()
+    local emulatedFrameStart = love.timer.getTime()
     cheats.ApplyRAM(cpuRAM.cpuRAM)
     loveSpeed.RecordCounter("emulatedFrames", 1)
     if Profile then profile.start() end
@@ -49,6 +50,14 @@ local function RunEmulatedFrame()
     local cpuElapsed = love.timer.getTime() - cpuStart
     loveSpeed.RecordComponent("cpuCore", cpuElapsed)
     loveSpeed.RecordComponent("cpu", cpuElapsed)
+
+    -- Render after the emulation timer closes.  PPU rendering used to happen
+    -- inside cpu.ExecuteCycles(), which made the CPU/Emu and PPU render
+    -- timings overlap and made the performance graph misleading.
+    if cpu.drawFrame then
+        ppu.StartGameWindow()
+    end
+    loveSpeed.RecordEmulatedFrame(love.timer.getTime() - emulatedFrameStart)
 end
 
 --& Run Once on Load

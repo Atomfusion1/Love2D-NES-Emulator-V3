@@ -53,6 +53,20 @@ local mirrorTable = {
     [3] = {[0]=1, [1]=1, [2]=1, [3]=1}
 }
 
+-- Resolve each logical nametable page to its backing table once.  The
+-- renderer reads both the tile and attribute byte from the same page, so it
+-- can select this table once instead of repeating the mirror decode twice.
+local mappedNametableTables = {
+    [0] = {[0]=tableName[0], [1]=tableName[0], [2]=tableName[1], [3]=tableName[1]},
+    [1] = {[0]=tableName[0], [1]=tableName[1], [2]=tableName[0], [3]=tableName[1]},
+    [2] = {[0]=tableName[0], [1]=tableName[0], [2]=tableName[0], [3]=tableName[0]},
+    [3] = {[0]=tableName[1], [1]=tableName[1], [2]=tableName[1], [3]=tableName[1]}
+}
+
+function nameTable.GetMappedNametableTables(mirrorMode)
+    return mappedNametableTables[mirrorMode == nil and cart.Mirror or mirrorMode]
+end
+
 function nameTable.NameTableMirrorRead(addr, mirrorMode)
     local maskedAddr = band(addr, 0x0FFF)
     local section = rshift(maskedAddr, 10) -- Divide by 0x400 to get 0-3

@@ -120,31 +120,38 @@ local function SelectAttributeValue(attributeTable, c_X, c_Y)
 end
 
 --# Draw Main Screen Helper
-local function calculateTileAndAttributeAddresses(ScrollX, ScrollY, localNamespace, mirrorMode)
-    local tileAddress         = localNamespace + ScrollY * 32 + ScrollX
-    local tileID              = nameTable.NameTableMirrorRead(tileAddress, mirrorMode)
-    local attributeAddress    = 0x03C0 + (rshift(ScrollY, 2)) * 8 + rshift(ScrollX, 2) + localNamespace
-    local attributeByte       = nameTable.NameTableMirrorRead(attributeAddress, mirrorMode)
+local function calculateTileAndAttributeAddresses(ScrollX, ScrollY, nametablePage, mappedTables)
+    local tableData           = mappedTables[nametablePage]
+    local tileID              = tableData[ScrollY * 32 + ScrollX]
+    local attributeAddress    = 0x03C0 + (rshift(ScrollY, 2)) * 8 + rshift(ScrollX, 2)
+    local attributeByte       = tableData[attributeAddress]
     local attributeValue      = SelectAttributeValue(attributeByte, ScrollX, ScrollY)
     return tileID, attributeValue
 end
 
 local function drawTileRow(screenTileX, screenTileY, fineY, tile_lsb, tile_msb, attributeValue, ptrScreenBuffer)
-    for fineX = 0, 7 do
-        local screenX = screenTileX + fineX
-        local screenY = screenTileY + fineY
-        if screenX >= 0 and screenX < 256 and screenY >= 0 and screenY < 240 then
-            local pixelPosition = screenX + screenY * 256
-            -- The leftmost pixel is stored in bit7, so compute bit index as 7 - fineX
-            local bitIndex = 7 - fineX
-            local pixelLSB = bit.band(tile_lsb, bit.lshift(1, bitIndex)) ~= 0 and 1 or 0
-            local pixelMSB = bit.band(tile_msb, bit.lshift(1, bitIndex)) ~= 0 and 1 or 0
-            local pixel = pixelLSB + (pixelMSB * 2)
-            if pixel ~= 0 then
-                local colorAddress = 0x3F00 + attributeValue * 4 + pixel
-                ptrScreenBuffer[pixelPosition] = ramBuffer32[colorAddress]
-            end
+    local screenY = screenTileY + fineY
+    if screenY < 0 or screenY >= 240 then return end
+
+    -- Clip the tile once per row instead of checking both coordinates for
+    -- every pixel.  The leftmost pixel is stored in bit 7.
+    local firstX = screenTileX < 0 and 0 or screenTileX
+    local lastX = screenTileX + 7 > 255 and 255 or screenTileX + 7
+    if firstX > lastX then return end
+
+    local pixelPosition = firstX + screenY * 256
+    local bitIndex = 7 - (firstX - screenTileX)
+    for screenX = firstX, lastX do
+        local mask = lshift(1, bitIndex)
+        local pixelLSB = band(tile_lsb, mask) ~= 0 and 1 or 0
+        local pixelMSB = band(tile_msb, mask) ~= 0 and 1 or 0
+        local pixel = pixelLSB + (pixelMSB * 2)
+        if pixel ~= 0 then
+            local colorAddress = 0x3F00 + attributeValue * 4 + pixel
+            ptrScreenBuffer[pixelPosition] = ramBuffer32[colorAddress]
         end
+        pixelPosition = pixelPosition + 1
+        bitIndex = bitIndex - 1
     end
 end
 
@@ -185,16 +192,23 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
     local tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
     -- Historical frame rendering must never alter the mapper's live mirror.
     local renderMirror = state.mapperMirror or state.mirror
+    local mappedNametableTables = nameTable.GetMappedNametableTables(renderMirror)
     local ppuSettings = require("NES.PPU.ppu")
     local scanLineOffset = ppuSettings.scanLineOffset
     local backgroundEnableOffset = ppuSettings.backgroundEnableOffset or 0
     local scanLine = -1
     local baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
+    -- Nametable tile/attribute values are constant across the eight fine-Y
+    -- rows of a tile.  Keep this cache local to one tile row and invalidate
+    -- it whenever a saved PPU state changes the scroll or mirror source.
+    local cachedTileIDs = {}
+    local cachedAttributeValues = {}
     -- screenY is the output row. sourceRow is the row relative to the
     -- current state.  They are normally the same, but a completed $2006
     -- split starts a new source viewport at the split scanline.
     local sourceRow = 0
     for tileY = 0, 30 do
+        local nametableCacheValid = false
         for fineY = 0, 7 do
             local nextState = states[ppuIRQCount + 1]
             local nextStateOffset = scanLineOffset
@@ -207,6 +221,7 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                 ppuIRQCount = ppuIRQCount + 1
                 local previousState = state
                 state = nextState
+                nametableCacheValid = false
                 -- A PPUMASK ($2001) state is a rendering-layer change, not a
                 -- scroll/nametable change. Keep the prior background source
                 -- so enabling sprites or masking the screen cannot blank or
@@ -216,6 +231,7 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                     -- They must not replace the PPU's v/t/x scroll origin.
                     tileSet = state.mapperSpriteTileSet or state.spriteTileSet
                     renderMirror = state.mapperMirror or state.mirror
+                    mappedNametableTables = nameTable.GetMappedNametableTables(renderMirror)
                 end
                 local bgWasEnabled = previousState.isDrawScreen ~= false
                 local bgIsEnabled = state.isDrawScreen ~= false
@@ -229,6 +245,7 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                     fineXOffset, fineYOffset = state.fineOffset_x, state.fineOffset_y
                     tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
                     renderMirror = state.mapperMirror or state.mirror
+                    mappedNametableTables = nameTable.GetMappedNametableTables(renderMirror)
                     baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
                     -- If sprites were already rendering, the PPU was still
                     -- consuming rendering time and the source row must keep
@@ -248,6 +265,7 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                         tileSet, backgroundTable = state.spriteTileSet, state.backgroundTable
                     end
                     renderMirror = state.mapperMirror or state.mirror
+                    mappedNametableTables = nameTable.GetMappedNametableTables(renderMirror)
                     baseScreenX, baseScreenY = -fineXOffset, -fineYOffset
                     if state.is2006 then
                         -- $2006 supplies a new VRAM origin.  Battletoads and
@@ -274,16 +292,25 @@ function PPUtoLove2d.DrawMainScreen(ptrScreenBuffer)
                         tileXIndex = tileXIndex - 32
                         effectiveNametableX = 1 - effectiveNametableX
                     end
-                    local localNamespace = 0x2000
-                        + effectiveNametableX * 0x400 + effectiveNametableY * 0x800
-                    local tileID, attributeValue = calculateTileAndAttributeAddresses(
-                        tileXIndex, tileYIndex, localNamespace, renderMirror)
+                    local nametablePage = effectiveNametableX + effectiveNametableY * 2
+                    local cacheIndex = tileX + 2
+                    local tileID = cachedTileIDs[cacheIndex]
+                    local attributeValue = cachedAttributeValues[cacheIndex]
+                    if not nametableCacheValid then
+                        tileID, attributeValue = calculateTileAndAttributeAddresses(
+                            tileXIndex, tileYIndex, nametablePage, mappedNametableTables)
+                        cachedTileIDs[cacheIndex] = tileID
+                        cachedAttributeValues[cacheIndex] = attributeValue
+                    end
                     local tileAddr = backgroundTable * 0x1000 + tileID * 16 + fineY
                     local tile_lsb, tile_msb = tileSet[tileAddr], tileSet[tileAddr + 8]
                     if tile_lsb == nil then return end
                     drawTileRow(screenTileX, screenTileY, fineY, tile_lsb, tile_msb,
                         attributeValue, ptrScreenBuffer)
                 end
+            end
+            if state.isDrawScreen ~= false then
+                nametableCacheValid = true
             end
             scanLine = scanLine + 1
         end
