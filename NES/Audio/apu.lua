@@ -13,7 +13,10 @@ local frameIRQInhibit = true
 local frameFiveStep = false
 local FRAME_PERIOD = 29830
 local HALF_FRAME_PERIOD = 14915
+local QUARTER_FRAME_PERIOD = 7457.5
 local lengthCycles = 0
+local frameSequenceCycles = 0
+local frameSequenceQuarter = 0
 local channelEnable = 0
 local channelLength = { 0, 0, 0, 0 }
 local channelHalt = { false, false, false, false }
@@ -29,6 +32,17 @@ end
 function apu.Clock(cycles)
     cycles = cycles or 0
     dmcSound.Clock(cycles)
+
+    -- The audio envelope and sweep are APU-clocked events, not Love2D frame
+    -- updates. Keep their timing on the CPU cycle clock.
+    frameSequenceCycles = frameSequenceCycles + cycles
+    while frameSequenceCycles >= QUARTER_FRAME_PERIOD do
+        frameSequenceCycles = frameSequenceCycles - QUARTER_FRAME_PERIOD
+        frameSequenceQuarter = frameSequenceQuarter + 1
+        pulseSound.ClockQuarterFrame(1)
+        pulseSound.ClockQuarterFrame(2)
+    end
+
     lengthCycles = lengthCycles + cycles
     while lengthCycles >= HALF_FRAME_PERIOD do
         lengthCycles = lengthCycles - HALF_FRAME_PERIOD
@@ -51,7 +65,13 @@ function apu.FrameCounterWrite(data)
     if frameIRQInhibit then frameIRQ = false end
     frameCycles = FRAME_PERIOD
     lengthCycles = 0
+    frameSequenceCycles = 0
+    frameSequenceQuarter = 0
     if frameFiveStep then clockLengthCounters() end
+    if frameFiveStep then
+        pulseSound.ClockQuarterFrame(1)
+        pulseSound.ClockQuarterFrame(2)
+    end
 end
 
 function apu.CheckIRQ()
@@ -201,6 +221,8 @@ function apu.Initialize()
     frameIRQInhibit = true
     frameFiveStep = false
     lengthCycles = 0
+    frameSequenceCycles = 0
+    frameSequenceQuarter = 0
     channelEnable = 0
     channelLength = { 0, 0, 0, 0 }
     channelHalt = { false, false, false, false }

@@ -39,19 +39,19 @@ apu_Noise.MainVolume = .025
 --# Stop the noise channel
 function apu_Noise.StopNoise()
     local mode = channel.playingNoiseMode
-    local note = channel.playingNote
-    if noiseSources and noiseSources[mode] and noiseSources[mode][note] then
-        noiseSources[mode][note]:setVolume(0)
-        noiseSources[mode][note]:stop()
+    local source = noiseSources and noiseSources[mode]
+    if source then
+        source:setVolume(0)
+        source:stop()
     end
 end
 
 --# Adjust the volume of the noise channel
 function apu_Noise.AdjustVolume(volume)
     local mode = channel.playingNoiseMode
-    local note = channel.playingNote
-    if noiseSources and noiseSources[mode] and noiseSources[mode][note] then
-        noiseSources[mode][note]:setVolume(volume * VolumeMulti * apu_Noise.MainVolume)
+    local source = noiseSources and noiseSources[mode]
+    if source then
+        source:setVolume(volume * VolumeMulti * apu_Noise.MainVolume)
     end
 end
 
@@ -59,11 +59,12 @@ end
 function apu_Noise.PlayNoise(note, volume)
     if channel.apuDebug then print("PLAYING NOTE:"..note.." volume "..volume * apu_Noise.MainVolume) end
     channel.elapsedTime = 0
-    noiseSources[channel.playingNoiseMode][channel.playingNote]:setVolume(0)
-    noiseSources[channel.playingNoiseMode][channel.playingNote]:stop()
+    apu_Noise.StopNoise()
     --* Calculate the playback rate based on the timer value and CPU clock
-    noiseSources[channel.noiseMode][note]:setVolume(volume * VolumeMulti * apu_Noise.MainVolume)
-    noiseSources[channel.noiseMode][note]:play()
+    local source = noiseSources.SetVoice(channel.noiseMode, note)
+    if not source then return end
+    source:setVolume(volume * VolumeMulti * apu_Noise.MainVolume)
+    source:play()
     channel.playingNote = note
     channel.playingNoiseMode = channel.noiseMode
 end

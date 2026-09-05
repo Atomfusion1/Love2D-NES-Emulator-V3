@@ -218,6 +218,7 @@ function controller.CheckControllers()
             controller.Controller1State = bit.band(controller.Controller1State, bit.bnot(bit.lshift(1, 6)))
         end
     end
+
     if joystick1 and joystick1:getGamepadAxis("triggerright") > .8 then
         OverRideSpeed = true
     end

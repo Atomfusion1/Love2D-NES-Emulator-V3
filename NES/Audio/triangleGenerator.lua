@@ -11,6 +11,7 @@ end
 local quantizationLevels = 32  -- Adjust this value to control the quantization
 local sampleRate = 44100
 local amplitude = .5
+local baseFrequency = 440.0
 local triangleSource = {}
 
 --& Of all ways to calculate a Triangle Wave This produces the Least amount of PoPs .. Fuck if i know why 
@@ -33,13 +34,20 @@ local function generateTriangleWaveCycles(sampleRate, frequency, amplitude, cycl
     return soundData
 end
 
---# Triangle Source
-for i, note in ipairs(frequencyTable) do
-    local soundData = generateTriangleWaveCycles(sampleRate, note, amplitude, 20)
+--# One reusable triangle source. The NES has only one triangle voice, so
+--# changing pitch is cheaper than keeping one source for every frequency.
+local soundData = generateTriangleWaveCycles(
+    sampleRate, baseFrequency, amplitude, 20)
 ---@diagnostic disable-next-line: param-type-mismatch
-    triangleSource[i] = love.audio.newSource(soundData, "static") -- True in 11+
-    triangleSource[i]:setPitch(1)
-    triangleSource[i]:setLooping(true)
+triangleSource.source = love.audio.newSource(soundData, "static") -- True in 11+
+triangleSource.source:setPitch(1)
+triangleSource.source:setLooping(true)
+
+function triangleSource.SetFrequencyIndex(index)
+    local frequency = frequencyTable[index]
+    if not frequency then return false end
+    triangleSource.source:setPitch(frequency / baseFrequency)
+    return true
 end
 
 --# Find the closest frequency in the frequency table

@@ -1,31 +1,14 @@
 print("Setting Up Pulse Sound Table This Might Take a Second")
 
---& NES Pulse Channel Notes to Create
-local frequencyTable = {}
-local A4 = 440.00
-local noteStep = .4
-local noteStart = 0.5
-local noteEnd = 128
-
-local index = 1
-
-for n = noteStart, noteEnd, noteStep do
-    local frequency = A4 * 2 ^ ((n - 69) / 12)
-
-    frequencyTable[index] = frequency
-
-    -- create your source here using frequency
-    -- pulseSource[channel][index][dutyCycle] = love.audio.newSource(...)
-
-    index = index + 1
-end
-
 -- Pulse Wave Settings
 local sampleRate = 44100
 local amplitude = .5
 local duration = 0.5
 local dutyCycles = {0.125, 0.25, 0.5, 0.75}  -- NES pulse duty modes: 12.5%, 25%, 50%, 75%
+local baseFrequency = 440.0
+local cpuClock = 1789773
 local pulseSource = {}
+local sharedWaveData = {}
 
 --# Generate Square Wave Table
 local function generateSquareWave(sampleRate, frequency, amplitude, duration, dutyCycle)
@@ -41,35 +24,38 @@ local function generateSquareWave(sampleRate, frequency, amplitude, duration, du
     return soundData
 end
 
---# Pulse Source for 2 Channels each having 4 Duty Cycles and 254 channels .5 midi 
+--# Generate one shared waveform for each duty cycle at a base frequency.
+-- Pulse 1 and Pulse 2 use separate Source objects below so they can play
+-- independently; pitch changes select the NES frequency without creating a
+-- new waveform or source during gameplay.
+for j = 0, #dutyCycles - 1 do
+    sharedWaveData[j] = generateSquareWave(
+        sampleRate, baseFrequency, amplitude, duration, dutyCycles[j + 1])
+end
+
+--# Pulse sources: 2 independent channels × 4 duty cycles.
 for l = 1, 2 do
     pulseSource[l] = {}
-    for i, note in ipairs(frequencyTable) do
-        pulseSource[l][i] = {}
-        for j = 0, #dutyCycles - 1 do
-            local dutyCycle = dutyCycles[j + 1]
-            local soundData = generateSquareWave(sampleRate, note, amplitude, duration, dutyCycle)
+    for j = 0, #dutyCycles - 1 do
+        local soundData = sharedWaveData[j]
 ---@diagnostic disable-next-line: param-type-mismatch
-            pulseSource[l][i][j] = love.audio.newSource(soundData, "static") -- True in love 11+
-            pulseSource[l][i][j]:setLooping(true)
-        end
+        pulseSource[l][j] = love.audio.newSource(soundData, "static") -- True in love 11+
+        pulseSource[l][j]:setLooping(true)
+        pulseSource[l][j]:setPitch(1)
     end
 end
 
---# Find the closest frequency in the frequency table
-function pulseSource.FindClosestFrequencyIndex(targetFrequency)
-    local closestIndex = 1
-    local closestDifference = math.abs(targetFrequency - frequencyTable[1])
-    for i = 2, #frequencyTable do
-        local difference = math.abs(targetFrequency - frequencyTable[i])
-        if difference < closestDifference then
-            closestIndex = i
-            closestDifference = difference
-        end
+function pulseSource.SetVoice(channel, timerValue, dutyCycle)
+    if type(timerValue) ~= "number" or timerValue < 0 or timerValue > 0x7FF then
+        return nil
     end
-    return closestIndex
+    local frequency = cpuClock / (16 * (timerValue + 1))
+    local source = pulseSource[channel] and pulseSource[channel][dutyCycle]
+    if not frequency or not source then return nil end
+    -- NES pulse periods below 8 are muted. Keep the source at a safe pitch
+    -- while muted instead of asking Love2D to reproduce an ultrasonic tone.
+    source:setPitch(timerValue < 8 and 1 or frequency / baseFrequency)
+    return source
 end
-
-pulseSource.NoteCount = #frequencyTable
 
 return pulseSource

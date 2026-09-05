@@ -41,8 +41,8 @@ local function samplesToSoundData(samples, sampleRate)
 end
 
 --# Create Noise Source
-local function createNoiseSource(frequency, numSamples, sampleRate, noiseAmplitude, mode)
-    local samples = generateLFSRNoise(frequency, numSamples, sampleRate, noiseAmplitude, mode)
+local function createNoiseSource(mode, numSamples, sampleRate, noiseAmplitude)
+    local samples = generateLFSRNoise(0, numSamples, sampleRate, noiseAmplitude, mode)
     local soundData = samplesToSoundData(samples, sampleRate)
 ---@diagnostic disable-next-line: param-type-mismatch
     local noiseSource = love.audio.newSource(soundData, "static") -- True in Love 11.0 + 
@@ -50,26 +50,31 @@ local function createNoiseSource(frequency, numSamples, sampleRate, noiseAmplitu
     return noiseSource
 end
 
---* Noise Settings
-local ntscFrequencies = {
-    4811.2, 2405.6, 1202.8, 601.4, 300.7, 200.5, 150.4,
-    120.3, 95.3, 75.8, 50.6, 37.9,25.3,18.9,9.5,4.7
-}
-local sampleRate = {
+--* Noise settings. The NES period values are represented by the LFSR
+--* clock rates; pitch selects one of these without creating another source.
+local noiseRates = {
     447443, 223721, 111860, 55930, 27965, 18643, 13982,
     11186, 8860, 7046, 4709, 3523, 2348, 1761, 879, 440
 }
 local duration = .5 -- in seconds
 local noiseAmplitude = 1
+local baseSampleRate = 44100
 
---# Create Sound Samples and Store in noiseSources
+--# Create one reusable source for each LFSR mode. Pitch controls the sixteen
+--# NES noise periods, so no source is created when the period changes.
 local noiseSources = {}
 for l = 0, 1 do
-    noiseSources[l] = {}
-    for i = 1, #ntscFrequencies do
-        noiseSources[l] [i] = createNoiseSource(ntscFrequencies[i], sampleRate[i] * duration, sampleRate[i], noiseAmplitude, l)
-        noiseSources[l] [i]:setLooping(true)
-    end
+    noiseSources[l] = createNoiseSource(
+        l, baseSampleRate * duration, baseSampleRate, noiseAmplitude)
+    noiseSources[l]:setLooping(true)
+end
+
+function noiseSources.SetVoice(mode, periodIndex)
+    local rate = noiseRates[periodIndex]
+    local source = noiseSources[mode]
+    if not rate or not source then return nil end
+    source:setPitch(rate / baseSampleRate)
+    return source
 end
 
 return noiseSources

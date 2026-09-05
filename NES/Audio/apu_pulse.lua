@@ -39,6 +39,10 @@ local channels = {
         sweepShift = 0,
         sweepCounter = 0,
         sweepElapsedTime = 0,
+        envelopeDivider = 0,
+        envelopeDecay = 15,
+        envelopeStart = false,
+        pulseMuted = false,
         LCTimer = 0,
         LCTimerLength = 0,
         apuDebug = false,
@@ -60,6 +64,10 @@ local channels = {
         sweepShift = 0,
         sweepCounter = 0,
         sweepElapsedTime = 0,
+        envelopeDivider = 0,
+        envelopeDecay = 15,
+        envelopeStart = false,
+        pulseMuted = false,
         LCTimer = 0,
         LCTimerLength = 0,
         apuDebug = false,
@@ -67,17 +75,33 @@ local channels = {
 }
 
 apu_Pulse.MainVolume = .001
-local maxNoteHeight = pulseSource.NoteCount -- Dynamically set to actual frequency table size
+
+local function calculateSweepTarget(channel, timer)
+    local ch = channels[channel]
+    local change = math.floor(timer / (2 ^ ch.sweepShift))
+    if ch.sweepNegate then
+        return timer - change - (channel == 1 and 1 or 0)
+    end
+    return timer + change
+end
+
+local function pulseOutputMuted(channel)
+    local ch = channels[channel]
+    -- The NES pulse output is silent for periods below 8. The sweep adder
+    -- can also mute the channel when its target overflows, even when sweep
+    -- updating is disabled.
+    return ch.timerValue < 8 or calculateSweepTarget(channel, ch.timerValue) > 0x7FF
+end
 
 --# Stop Pulse Note
 function apu_Pulse.StopPulseNote(channel)
     local ch = channels[channel]
-    local note = ch.playingNote
     local duty = ch.playingDutyCycle
+    local source = pulseSource[channel] and pulseSource[channel][duty]
 
-    if pulseSource[channel] and pulseSource[channel][note] and pulseSource[channel][note][duty] then
-        pulseSource[channel][note][duty]:setVolume(0)
-        pulseSource[channel][note][duty]:stop()
+    if source then
+        source:setVolume(0)
+        source:stop()
     end
 
     ch.isNotePlaying = false
@@ -92,35 +116,112 @@ function apu_Pulse.AdjustVolume(channel,volume)
     if setVolume < 0.001 then setVolume = 0 end
     
     local ch = channels[channel]
-    local note = ch.playingNote
     local duty = ch.playingDutyCycle
-    if pulseSource[channel] and pulseSource[channel][note] and pulseSource[channel][note][duty] then
-        pulseSource[channel][note][duty]:setVolume(setVolume)
+    local source = pulseSource[channel] and pulseSource[channel][duty]
+    if source then
+        source:setVolume(setVolume)
     end
     
     -- require('jit').on() -- Step 3: Commented out JIT toggle (crash prevention workaround)
 end 
 
---# Play Pulse Note
-function apu_Pulse.PlayPulseNote(channel, note, volume, dutyCycle)
+local function currentOutputLevel(ch)
+    if ch.constVolume == 1 then return ch.volume end
+    return ch.envelopeDecay
+end
+
+function apu_Pulse.ApplyCurrentVolume(channel)
+    local ch = channels[channel]
+    ch.pulseMuted = pulseOutputMuted(channel)
+    if ch.pulseMuted then
+        local source = pulseSource[channel] and pulseSource[channel][ch.playingDutyCycle]
+        if source then source:setVolume(0) end
+        return
+    end
+    apu_Pulse.AdjustVolume(channel, currentOutputLevel(ch))
+end
+
+--# Clock the NES envelope once per quarter frame.
+function apu_Pulse.ClockQuarterFrame(channel)
+    local ch = channels[channel]
+    if ch.envelopeStart then
+        ch.envelopeStart = false
+        ch.envelopeDecay = 15
+        ch.envelopeDivider = ch.volume
+    elseif ch.envelopeDivider == 0 then
+        ch.envelopeDivider = ch.volume
+        if ch.envelopeDecay > 0 then
+            ch.envelopeDecay = ch.envelopeDecay - 1
+        elseif ch.LCHalt == 1 then
+            ch.envelopeDecay = 15
+        end
+    else
+        ch.envelopeDivider = ch.envelopeDivider - 1
+    end
+
+    if ch.isNotePlaying then apu_Pulse.ApplyCurrentVolume(channel) end
+end
+
+--# Update the pulse sweep using the previous frame-time implementation.
+function SweepUpdate(channel, dt)
+    local ch = channels[channel]
+    if not ch.sweepEnabled or ch.sweepShift == 0 then return end
+
+    local sweepSpeedMultiplier = 70
+    local sweepInterval = ch.sweepPeriod
+    ch.sweepElapsedTime = ch.sweepElapsedTime + (dt * sweepSpeedMultiplier)
+
+    if ch.sweepElapsedTime >= sweepInterval then
+        ch.sweepElapsedTime = ch.sweepElapsedTime - sweepInterval
+
+        local timer = ch.timerValue
+        local newTimer = calculateSweepTarget(channel, timer)
+
+        if newTimer > 0x7FF then
+            -- Sweep overflow mutes the pulse but does not stop the channel's
+            -- length/envelope state on the NES.
+            apu_Pulse.ApplyCurrentVolume(channel)
+        elseif newTimer < 8 then
+            ch.timerValue = newTimer
+            if ch.isNotePlaying then apu_Pulse.SetPulseFrequency(channel) end
+        else
+            ch.timerValue = newTimer
+            if ch.isNotePlaying then apu_Pulse.SetPulseFrequency(channel) end
+        end
+    end
+end
+
+--# Update the exact timer frequency without restarting the source.
+function apu_Pulse.SetPulseFrequency(channel)
+    local ch = channels[channel]
+    local source = pulseSource.SetVoice(channel, ch.timerValue, ch.dutyCycle)
+    if ch.isNotePlaying then apu_Pulse.ApplyCurrentVolume(channel) end
+    return source
+end
+
+--# Start a pulse. A high timer write ($4003/$4007) resets the sequencer.
+function apu_Pulse.PlayPulseNote(channel, timerValue, volume, dutyCycle)
     -- require('jit').off() -- Step 3: Commented out JIT toggle (crash prevention workaround)
     local ch = channels[channel]
-    
-    if ch.playingNote == note and ch.isNotePlaying then  return end
-    --& Set volume to 0 and stop any playing notes
-        apu_Pulse.StopPulseNote(channel)
-    --& Set volume to level and play
-    if note >= 1 and note <= maxNoteHeight then
-        pulseSource[channel][note][dutyCycle]:setVolume(volume * apu_Pulse.MainVolume * VolumeMulti)
-        pulseSource[channel][note][dutyCycle]:play()
 
-        ch.isNotePlaying = true
-        ch.playingNote = note
-        ch.playingDutyCycle = dutyCycle
-        ch.elapsedTime = 0
-        ch.LCTimer = 0
-        ch.sweepElapsedTime = 0
-    end
+    --& Set volume to 0 and stop any playing notes
+    apu_Pulse.StopPulseNote(channel)
+    --& Set volume to level and play
+    local source = pulseSource.SetVoice(channel, timerValue, dutyCycle)
+    if not source then return end
+    source:setVolume(volume * apu_Pulse.MainVolume * VolumeMulti)
+    source:play()
+
+    ch.isNotePlaying = true
+    ch.playingNote = timerValue
+    ch.playingDutyCycle = dutyCycle
+    ch.elapsedTime = 0
+    ch.LCTimer = 0
+    ch.sweepElapsedTime = 0
+    ch.envelopeStart = true
+    ch.envelopeDecay = 15
+    ch.envelopeDivider = ch.volume
+    apu_Pulse.ApplyCurrentVolume(channel)
     -- require('jit').on() -- Step 3: Commented out JIT toggle (crash prevention workaround)
 end
 
@@ -128,7 +229,7 @@ end
 function LengthUpdate(channel, dt)
     -- require('jit').off() -- Step 3: Commented out JIT toggle (crash prevention workaround)
     local ch = channels[channel]
-    if ch.LCHalt == 1 then --* Do Nothing Note will not stop        
+    if ch.LCHalt == 1 then --* Do Nothing Note will not stop
     else
         ch.LCTimer = ch.LCTimer + (dt * 100)
         if ch.LCTimer > ch.LCTimerLength then
@@ -138,83 +239,11 @@ function LengthUpdate(channel, dt)
     -- require('jit').on() -- Step 3: Commented out JIT toggle (crash prevention workaround)
 end
 
---# Pulse Channel Volume Envelope Update
-function EnvelopeUpdate(channel, dt)
-    -- require('jit').off() -- Step 3: Commented out JIT toggle (crash prevention workaround)
-    local ch = channels[channel]
-    if ch.constVolume == 0 then
-        ch.elapsedTime = ch.elapsedTime + dt*20
-        if ch.elapsedTime >= (ch.elapsedTimeLength) then
-            if ch.LCHalt == 1 then
-                ch.elapsedTime = 0
-            else --* one shot
-                apu_Pulse.StopPulseNote(channel)
-            end
-        else
-            --* Optional: Fade out the volume (linear fade out)
-            local fadeOutFactor = (((ch.elapsedTimeLength) - ch.elapsedTime) / (ch.elapsedTimeLength))
-            local newVolume = 0x09 * fadeOutFactor
-            if newVolume > 0 then
-                apu_Pulse.AdjustVolume(channel, newVolume)
-            end
-        end
-    else
-        --* Playing Sound at Constant Volume
-    end
-    -- require('jit').on() -- Step 3: Commented out JIT toggle (crash prevention workaround)
-end
-
---# Pulse Channel Sweep Update 
---# Pulse Channel Sweep Update (Updated)
-function SweepUpdate(channel, dt)
-    -- require('jit').off() -- Step 3: Commented out JIT toggle (crash prevention workaround)
-    local ch = channels[channel]
-    if not ch.sweepEnabled or ch.sweepShift == 0 then
-        -- require('jit').on() -- Step 3: Commented out JIT toggle (crash prevention workaround)
-        return
-    end
-    -- Use a higher multiplier to speed up the sweep tick rate.
-    local sweepSpeedMultiplier = 70  -- Increase this value for even faster updates.
-    local sweepInterval = ch.sweepPeriod
-    ch.sweepElapsedTime = ch.sweepElapsedTime + (dt * sweepSpeedMultiplier)
-
-    if ch.sweepElapsedTime >= sweepInterval then
-        ch.sweepElapsedTime = ch.sweepElapsedTime - sweepInterval
-
-        local timer = ch.timerValue
-        -- Compute the sweep change using a right-shift equivalent.
-        local change = math.floor(timer / (2 ^ ch.sweepShift))
-        local newTimer
-
-        if ch.sweepNegate then
-            -- For pulse channel 1, subtract an extra 1.
-            newTimer = timer - change - (channel == 1 and 1 or 0)
-        else
-            newTimer = timer + change
-        end
-
-        -- If the new timer value is out of bounds, silence the channel.
-        if newTimer < 8 or newTimer > 0x7FF then
-            apu_Pulse.StopPulseNote(channel)
-        else
-            ch.timerValue = newTimer * .98
-            local frequency = 1789773 / (16 * (newTimer + 1))
-            local noteToPlay = pulseSource.FindClosestFrequencyIndex(frequency)
-            apu_Pulse.PlayPulseNote(channel, noteToPlay, ch.volume, ch.dutyCycle)
-        end
-    end
-    -- require('jit').on() -- Step 3: Commented out JIT toggle (crash prevention workaround)
-end
-
-
-
-
 --# Update Pulse Channels
 function apu_Pulse.UpdatePulse(channel, dt)
     local ch = channels[channel]
     if ch.isNotePlaying == false then return end
     LengthUpdate(channel, dt)
-    EnvelopeUpdate(channel,dt)
     SweepUpdate(channel, dt)
 end
 
@@ -230,8 +259,7 @@ function apu_Pulse.HandlePulse(channel, addr, data)
         ch.LCHalt = bit.rshift(bit.band(data, 0x20), 5)
         ch.constVolume = bit.rshift(bit.band(data, 0x10), 4)
         ch.volume = bit.band(data, 0x0F)
-        ch.elapsedTimeLength = ch.volume + 1
-        apu_Pulse.AdjustVolume(channel, ch.volume) 
+        apu_Pulse.ApplyCurrentVolume(channel)
         if ch.apuDebug then 
             print("0x4000 "..channel.." data "..numToBinary(data).." dutyCycle "..ch.dutyCycle.." LCHalt "..
             ch.LCHalt.." constVolume1 "..ch.constVolume.." pulseVolume1 "..ch.volume)
@@ -246,16 +274,14 @@ function apu_Pulse.HandlePulse(channel, addr, data)
         if ch.apuDebug then
             print("0x4001 "..channel.." data "..numToBinary(data).." sweepenabled ",
             ch.sweepEnabled," sweepperiod "..ch.sweepPeriod.." sweepNegative ",ch.sweepNegate," sweepshift "..
-            ch.sweepShift.." swiftCounter "..ch.sweepCounter) 
+            ch.sweepShift.." sweepCounter "..ch.sweepCounter)
         end
     elseif pulseOffset == 2 then
         --% Pulse Channel Timer Low
         ch.timerValue = bit.band(ch.timerValue, 0x700)
         ch.timerValue = bit.bor(ch.timerValue, data)
-        --& Calculate frequency and Play Note
-        local frequency = 1789773 / (16 * (ch.timerValue + 1))
-        local noteToPlay = pulseSource.FindClosestFrequencyIndex(frequency)
-        apu_Pulse.PlayPulseNote(channel, noteToPlay, ch.volume, ch.dutyCycle)
+        --& A low timer write changes pitch but does not reset pulse phase.
+        if ch.isNotePlaying then apu_Pulse.SetPulseFrequency(channel) end
         if ch.apuDebug then
             print("0x4002 "..channel.." data "..numToBinary(data).." TimerValue "..ch.timerValue)
         end
@@ -264,13 +290,12 @@ function apu_Pulse.HandlePulse(channel, addr, data)
         ch.timerValue = bit.band(ch.timerValue, 0xFF)
         ch.timerValue = bit.bor(ch.timerValue, bit.lshift(bit.band(data, 0x07), 8))
         ch.LCTimerLength = lengthTable[bit.rshift(data, 3)]
-        --& Calculate frequency and Play Note
-        local frequency = 1789773 / (16 * (ch.timerValue + 1))
-        local noteToPlay = pulseSource.FindClosestFrequencyIndex(frequency)
-        apu_Pulse.PlayPulseNote(channel, noteToPlay, ch.volume, ch.dutyCycle)
+        --& A high timer write reloads the timer and resets the pulse phase.
+        apu_Pulse.PlayPulseNote(channel, ch.timerValue, ch.volume, ch.dutyCycle)
         if ch.apuDebug then
+            local frequency = 1789773 / (16 * (ch.timerValue + 1))
             print("0x4003 "..channel.." data "..numToBinary(data).. " TimerValue "..
-            ch.timerValue.." frequency "..frequency.." midi "..noteToPlay.." timeoutLength "..ch.LCTimerLength)
+            ch.timerValue.." frequency "..frequency.." timeoutLength "..ch.LCTimerLength)
         end
     end
 end

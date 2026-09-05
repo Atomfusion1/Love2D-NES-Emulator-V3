@@ -41,9 +41,8 @@ apu_Triangle.MainVolume = .12
 
 --# Stop the triangle channel
 function apu_Triangle.StopTriangle()
-    local note = channel.playingNote
-    if triangleSource and triangleSource[note] then
-        triangleSource[note]:stop()
+    if triangleSource and triangleSource.source then
+        triangleSource.source:stop()
     end
     channel.isNotePlaying = false
 end
@@ -51,9 +50,8 @@ end
 --# Adjust the volume of the triangle channel
 function apu_Triangle.AdjustVolume(volume)
     local setVolume = volume * apu_Triangle.MainVolume * VolumeMulti
-    local note = channel.playingNote
-    if triangleSource and triangleSource[note] then
-        triangleSource[note]:setVolume(setVolume)
+    if triangleSource and triangleSource.source then
+        triangleSource.source:setVolume(setVolume)
     end
 end
 
@@ -66,8 +64,9 @@ function apu_Triangle.PlayTriangle(note, volume)
         if note > 300 then return end
         channel.playingNote = note
         channel.isNotePlaying = true
+        triangleSource.SetFrequencyIndex(note)
         apu_Triangle.AdjustVolume(apu_Triangle.MainVolume)
-        triangleSource[note]:play()
+        triangleSource.source:play()
     end
 end
 
