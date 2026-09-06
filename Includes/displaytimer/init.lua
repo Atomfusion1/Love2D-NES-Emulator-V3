@@ -212,7 +212,7 @@ function displayTimer.GetStats()
     return {
         current = math.max(0, cycleTime),
         average = frameSampleCount > 0 and total / frameSampleCount or 0,
-        peak = maxFUT,
+        peak = sorted[1] or 0,
         onePercentLow = onePercentLow,
         fps = emulatedFPS,
         memoryMB = collectgarbage("count") / 1024,

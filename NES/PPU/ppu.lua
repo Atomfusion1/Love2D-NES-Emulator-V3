@@ -8,6 +8,8 @@ local ppuBus        = require("NES.PPU.ppuBus")
 local profile       = require("Includes.profile.profile")
 local displayTimer  = require("Includes.displaytimer")
 local mapper        = require("NES.Cartridge.Mappers")
+local lightGun      = require("NES.Controller.light_gun")
+local lightGunPixel = require("NES.PPU.light_gun_pixel")
 
 --! Entire PPU is a Hack Job and Needs to be reworked from the ground up but I am lazy and it works so i am not going to touch it
 local ppu             = {}
@@ -232,6 +234,7 @@ function ppu.Update(cpuCycles)
     local renderingEnabled = band(ppuIO.MASKS, 0x18) ~= 0
 
     if scanLines == 0 and scanLinePixels == 0 then
+        if lightGun.IsEnabled() then lightGun.BeginFrame() end
         ppu.clearPPUStates()
         -- The CPU can update OAM during vblank before this frame is
         -- presented. Keep the OAM used by the completed frame aligned with
@@ -270,6 +273,9 @@ function ppu.Update(cpuCycles)
         local oldPixel = scanLinePixels
         local dots = math.min(ppuCycles, 341 - oldPixel)
         local newPixel = oldPixel + dots
+        if lightGun.IsEnabled() then
+            lightGun.AdvancePPU(scanLines, oldPixel, newPixel, lightGunPixel.Read)
+        end
 
         -- Dot 1 events.
         if oldPixel < 1 and newPixel >= 1 then

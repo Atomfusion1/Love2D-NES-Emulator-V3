@@ -9,6 +9,8 @@ if joysticks[2] then print("Joystick2 Detected and Setup Successfully") end
 
 -- # Setup Controller
 local controller             = {}
+local lightGun               = require("NES.Controller.light_gun")
+local port2Device             = "gamepad"
 controller.turboLatch1 = 0
 controller.turboLatch2 = 0
 controller.Controller1State  = 0x00
@@ -75,11 +77,49 @@ function controller.Reset()
     Controller1FreezeState = 0x00
     Controller2FreezeState = 0x00
     controllerStrobe = false
+    port2Device = "gamepad"
+    lightGun.SetEnabled(false)
     rapidCounter = 0
     for index = 1, 2 do
         directionSequence[index] = { up = 0, down = 0, left = 0, right = 0, next = 0 }
         previousDirections[index] = { up = false, down = false, left = false, right = false }
     end
+end
+
+-- Port 2 can host either the normal serial joypad or an NES Zapper. Keep the
+-- default as a gamepad so existing games and controls are unchanged.
+function controller.SetPort2Device(device)
+    port2Device = device == "zapper" and "zapper" or "gamepad"
+    lightGun.SetEnabled(port2Device == "zapper")
+end
+
+function controller.GetPort2Device()
+    return port2Device
+end
+
+function controller.UpdateLightGun(screenX, screenY, screenWidth, screenHeight)
+    if port2Device == "zapper" then
+        lightGun.UpdateMouse(screenX, screenY, screenWidth, screenHeight)
+    end
+end
+
+function controller.LightGunMousePressed(button)
+    if port2Device == "zapper" then
+        lightGun.MousePressed(button)
+        if button == 1 then lightGun.RecordCalibrationPoint() end
+    end
+end
+
+function controller.GetLightGunCalibrationPoints()
+    return lightGun.GetCalibrationPoints()
+end
+
+function controller.LightGunMouseReleased(button)
+    if port2Device == "zapper" then lightGun.MouseReleased(button) end
+end
+
+function controller.GetLightGunDebug()
+    return lightGun.GetDebugInfo()
 end
 
 -- # Setup Key Pressed Values 
@@ -183,6 +223,8 @@ function controller.CheckControllers()
     controller.Controller1State = 0x00
     controller.Controller2State = 0x00
     OverRideSpeed = false
+    -- The caller supplies the game viewport through UpdateLightGun. This
+    -- keeps mouse coordinates independent from debug panels and borders.
     local rapidRate = cheats.GetRapidRate()
     rapidCounter = (rapidCounter + 1) % (rapidRate * 2)
     for key, value in pairs(keyIsDown) do

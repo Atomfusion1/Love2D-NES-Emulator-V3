@@ -1182,13 +1182,23 @@ function testing.DisplayUI()
             end
         elseif activeTab == "performance" then
             local stats = displayTimer.GetStats()
+            local selectedValues = stats.samples
+            if performanceFocus == "cpu" then selectedValues = stats.components.cpuCore end
+            if performanceFocus == "ppu" then selectedValues = stats.components.ppu end
+            local selectedPeak, selectedTotal = 0, 0
+            for _, value in ipairs(selectedValues) do
+                selectedPeak = math.max(selectedPeak, value)
+                selectedTotal = selectedTotal + value
+            end
+            local selectedCurrent = selectedValues[#selectedValues] or 0
+            local selectedAverage = #selectedValues > 0 and selectedTotal / #selectedValues or 0
             love.graphics.setColor(0.75, 0.85, 0.95, 1)
-            love.graphics.print("Performance", 600, 110)
+            love.graphics.print("Performance (selected timing; last 600 NES frames)", 600, 110)
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.print(string.format("Current: %.2f ms", stats.current * 1000), 600, 145)
-            love.graphics.print(string.format("Average: %.2f ms", stats.average * 1000), 600, 165)
-            love.graphics.print(string.format("Peak: %.2f ms", stats.peak * 1000), 600, 185)
-            love.graphics.print(string.format("1%% low: %.1f FPS", stats.onePercentLow > 0 and 1 / stats.onePercentLow or 0), 600, 205)
+            love.graphics.print(string.format("Current: %.2f ms", selectedCurrent * 1000), 600, 145)
+            love.graphics.print(string.format("Average: %.2f ms", selectedAverage * 1000), 600, 165)
+            love.graphics.print(string.format("Peak: %.2f ms", selectedPeak * 1000), 600, 185)
+            love.graphics.print(string.format("Overall 1%% low: %.1f FPS", stats.onePercentLow > 0 and 1 / stats.onePercentLow or 0), 600, 205)
             love.graphics.print(string.format("FPS: %.2f", stats.fps), 800, 145)
             love.graphics.print(string.format("Lua memory: %.2f MB", stats.memoryMB), 800, 165)
             love.graphics.print(string.format("Memory delta: %+.1f KB", stats.memoryDeltaKB or 0), 800, 185)
@@ -1209,7 +1219,7 @@ function testing.DisplayUI()
                 return values[#values] or 0
             end
             love.graphics.print(string.format(
-                "Last NES frame: CPU path %.2f  instr %.2f  reads %.2f  PPU emu %.2f  PPU draw %.2f ms",
+                "CPU %.2f ms; sampled estimates: instr %.2f / reads %.2f / PPU %.2f; PPU draw %.2f ms",
                 latestComponentMs("cpu"), latestComponentMs("cpuInstruction"),
                 latestComponentMs("cpuRead"), latestComponentMs("ppuEmu"),
                 latestComponentMs("ppu")), 600, 278)
@@ -1239,6 +1249,9 @@ function testing.DisplayUI()
             if performanceFocus == "ppu" then graphValues = stats.components.ppu end
             local focusedPeak = 0
             for _, value in ipairs(graphValues) do focusedPeak = math.max(focusedPeak, value) end
+            if performanceFocus == "cpu" then
+                for _, value in ipairs(stats.components.apu) do focusedPeak = math.max(focusedPeak, value) end
+            end
             local minimumScaleMs = performanceFocus == "overall" and 16.67 or 4.0
             local graphMaxMs = math.max(focusedPeak * 1100, minimumScaleMs)
             love.graphics.setColor(0.04, 0.07, 0.1, 1)
@@ -1267,10 +1280,7 @@ function testing.DisplayUI()
                 if performanceFocus == "cpu" then
                     series = {
                         { label = "CPU core", values = stats.components.cpuCore, color = { 1, 0.65, 0.3, 1 } },
-                        { label = "Instructions", values = stats.components.cpuInstruction, color = { 0.95, 0.85, 0.25, 1 } },
-                        { label = "Reads", values = stats.components.cpuRead, color = { 0.85, 0.55, 1, 1 } },
                         { label = "APU", values = stats.components.apu, color = { 1, 0.35, 0.6, 1 } },
-                        { label = "PPU emu", values = stats.components.ppuEmu, color = { 0.75, 0.5, 1, 1 } }
                     }
                 elseif performanceFocus == "ppu" then
                     series = {
@@ -1317,10 +1327,7 @@ function testing.DisplayUI()
             if performanceFocus == "cpu" then
                 legend = {
                     { label = "CPU core", color = { 1, 0.65, 0.3, 1 } },
-                    { label = "Instructions", color = { 0.95, 0.85, 0.25, 1 } },
-                    { label = "Reads", color = { 0.85, 0.55, 1, 1 } },
                     { label = "APU", color = { 1, 0.35, 0.6, 1 } },
-                    { label = "PPU emu", color = { 0.75, 0.5, 1, 1 } }
                 }
             elseif performanceFocus == "ppu" then
                 legend = {
@@ -1348,7 +1355,7 @@ function testing.DisplayUI()
             love.graphics.setColor(0.65, 0.75, 0.85, 1)
             love.graphics.print("Time axis: recent expanded -> older compressed (600 frames)", graphX + 10, graphY + graphH + 8)
             love.graphics.setColor(0.95, 0.85, 0.25, 1)
-            love.graphics.print("Yellow bottom ticks = frames containing CHR snapshots", 600, 533)
+            love.graphics.print(performanceFocus == "cpu" and "Estimates overlap and may exceed CPU time; graph shows measured times." or "Yellow bottom ticks = frames containing CHR snapshots", 600, 533)
 
             local slowest = {}
             local cpuValues = stats.components.cpuCore or {}

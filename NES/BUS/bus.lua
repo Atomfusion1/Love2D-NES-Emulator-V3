@@ -73,6 +73,10 @@ local function CPUReadImpl(addr)
         if addr == 0x4016 or addr == 0x4017 then
             local previousByte = 0x40;
             local controllerData =  controller.ReadState(addr) -- This function reads the raw controller data.
+            if addr == 0x4017 and controller.GetPort2Device() == "zapper" then
+                local lightGun = require("NES.Controller.light_gun")
+                controllerData = bit.bor(controllerData, lightGun.ReadState())
+            end
             controllerData = bit.bor(bit.band(controllerData, 0x1F), previousByte) -- Keep the top 3 bits of the previous byte (0x40) and combine with the bottom 5 bits of the current byte.
             --print(string.format("%x", addr), controllerData)
             return driveBus(controllerData)

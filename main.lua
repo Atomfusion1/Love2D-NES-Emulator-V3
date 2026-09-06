@@ -72,6 +72,8 @@ end
 function love.update(dt)
     loveSpeed.StartTimer()  --* Start us Timer
     keyboard.Update(dt)     --* Keyboard Update
+    local gunX, gunY, gunW, gunH = pputolove.GetScreenViewport()
+    controller.UpdateLightGun(gunX, gunY, gunW, gunH)
     if not EmulationReady then
         emulationTime = 0
         return
@@ -169,10 +171,29 @@ end
 -- The file picker installs callbacks while loading. Keep popup input handling,
 -- then route debugger input through the shell as well.
 function love.mousepressed(x, y, button, istouch)
+    if not selectFile.isPopupVisible and controller.GetPort2Device() == "zapper" then
+        local vx, vy, vw, vh = pputolove.GetScreenViewport()
+        require("NES.Controller.light_gun").SetAim((x - vx) * 256 / vw, (y - vy) * 240 / vh)
+    end
+    controller.LightGunMousePressed(button)
+    if button == 1 and controller.GetPort2Device() == "zapper" then
+        local gx, gy, radius, brightness, threshold, detected = controller.GetLightGunDebug()
+        local mx, my = love.mouse.getPosition()
+        local vx, vy, vw, vh = pputolove.GetScreenViewport()
+        print(string.format("Zapper press: NES (%s,%s), radius %d, LAST beam sample %.3f / threshold %.3f (%s); following PPU frames logged below",
+            gx and tostring(gx) or "off", gy and tostring(gy) or "off", radius,
+            brightness, threshold, detected and "LIGHT" or "DARK"))
+        print(string.format("  mouse=(%.1f,%.1f) viewport=(%.1f,%.1f %.1fx%.1f) scale=%.2f",
+            mx, my, vx, vy, vw, vh, vw / 256))
+    end
     selectFile.MousePressed(x, y, button)
     if not selectFile.isPopupVisible then
         testing.MousePressed(x, y, button)
     end
+end
+
+function love.mousereleased(x, y, button, istouch)
+    controller.LightGunMouseReleased(button)
 end
 
 function love.keypressed(key, scancode, isrepeat)
@@ -186,6 +207,12 @@ function love.keypressed(key, scancode, isrepeat)
     if key == "f3" then
         local enabled = ppu.ToggleOAMBoxes()
         print("OAM 8x8 boxes: " .. (enabled and "on" or "off"))
+        return
+    end
+    if key == "f6" then
+        local zapperEnabled = controller.GetPort2Device() ~= "zapper"
+        controller.SetPort2Device(zapperEnabled and "zapper" or "gamepad")
+        print("Controller port 2: " .. (zapperEnabled and "Zapper" or "Gamepad"))
         return
     end
     keyboard.HandleKeyPressed(key)
@@ -240,6 +267,11 @@ function Initialize (file)
     bus.RefreshMapperCache()  -- Cache mapper functions for hot-path optimization
     cpuRAM.Reset()
     controller.Reset()
+    -- Duck Hunt and similarly named dumps use the Zapper on port 2. Other
+    -- cartridges retain the normal gamepad automatically.
+    if string.find(string.lower(file or ""), "duck") then
+        controller.SetPort2Device("zapper")
+    end
     ppu.Reset()
 
     -- Reset clears the prior title's overrides; apply those for the new title.

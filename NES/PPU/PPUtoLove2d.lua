@@ -585,25 +585,50 @@ end
 
 
 selectedState = 1
+
+-- Viewport used by input devices as well as rendering. Keeping this
+-- calculation here ensures a mouse Zapper follows the actual game image.
+function PPUtoLove2d.GetScreenViewport()
+    local screenScale, screenX, screenY
+    if EnableDebug then
+        screenScale, screenX, screenY = 2, 10, 65
+    else
+        screenScale = math.floor(love.graphics.getHeight() / 240)
+        if screenScale < 1 then screenScale = 1 end
+        screenX = math.floor((love.graphics.getWidth() - 256 * screenScale) / 2)
+        screenY = math.floor((love.graphics.getHeight() - 240 * screenScale) / 2)
+    end
+    return screenX, screenY, 256 * screenScale, 240 * screenScale
+end
+
 --# Draw Game Window and Scale it to fit the screen
 function PPUtoLove2d.GameWindow()
-    local screenScale = 2
-    local screenX = 0
-    local screenY = 15
-    if EnableDebug then
-        screenScale = 2
-        screenX = 10
-        screenY = 65
-    else
-        screenScale = math.floor(love.graphics.getHeight() / 240)  --* Integer scale to fit window height
-        if screenScale < 1 then screenScale = 1 end
-        local scaledW = screenImage:getWidth() * screenScale
-        local scaledH = screenImage:getHeight() * screenScale
-        screenX = math.floor((love.graphics.getWidth()  - scaledW) / 2)  --* Center horizontally
-        screenY = math.floor((love.graphics.getHeight() - scaledH) / 2)  --* Center vertically
-    end
+    local screenX, screenY, screenWidth = PPUtoLove2d.GetScreenViewport()
+    local screenScale = screenWidth / 256
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(screenImage, screenX, screenY, 0, screenScale)
+    local controller = require("NES.Controller.controller")
+    if controller.GetPort2Device() == "zapper" then
+        local aimX, aimY, radius, brightness, threshold, detected = controller.GetLightGunDebug()
+        local frame, line, sampleX = require("NES.Controller.light_gun").GetSampleInfo()
+        if aimX and aimY then
+            love.graphics.setColor(detected and 0.2 or 1, detected and 1 or 0.2, 0.2, 1)
+            local box = (radius * 2 + 1) * screenScale
+            love.graphics.rectangle("line", screenX + (aimX - radius) * screenScale,
+                screenY + (aimY - radius) * screenScale, box, box)
+            love.graphics.print(string.format("Beam sample %.2f / %.2f | frame %d SL %d X %d", brightness, threshold, frame, line, sampleX),
+                screenX + 4, screenY + 4)
+        end
+        local calibrationPoints = controller.GetLightGunCalibrationPoints()
+        for i, point in ipairs(calibrationPoints) do
+            love.graphics.setColor(0, 1, 1, 1)
+            love.graphics.circle("line", screenX + point.x * screenScale,
+                screenY + point.y * screenScale, 5)
+            love.graphics.print(tostring(i), screenX + point.x * screenScale + 6,
+                screenY + point.y * screenScale - 8)
+        end
+    end
+    love.graphics.setColor(1, 1, 1, 1)
     if EnableDebug and DebugActiveTab == "ppu" then
         --print()
         for i = 1, #loopy.ppuStates do
