@@ -141,7 +141,8 @@ function cpu.ExecuteCycles(totalCycles)
     local opcode, opTable, pcStep, cycleCost, results
     local ppuCycleDebt = 0  -- Batch PPU updates with a small timing-safe threshold
     -- Zapper reads must see the beam progress between CPU instructions.
-    local PPU_UPDATE_THRESHOLD = require("NES.Controller.light_gun").IsEnabled() and 1 or 114
+    -- 114 CPU cycles x 3 = 342 PPU dots
+    local PPU_UPDATE_THRESHOLD = require("NES.Controller.light_gun").IsEnabled() and 114 or 114
     
     -- Localize hot-path functions to avoid table lookups
     local PPUUpdate = ppu.Update
