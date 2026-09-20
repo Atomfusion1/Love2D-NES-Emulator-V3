@@ -263,6 +263,12 @@ function ppuBus.PPURead(addr)
     if addr > 0x3FFF then
         addr = band(addr, 0x3FFF)
     end
+
+    -- Mapper 218 connects CIRAM directly to the entire PPU address bus, so
+    -- its internal 2 KiB RAM serves both pattern tables and nametables.
+    if cart.mapper == 218 and addr <= 0x3EFF then
+        return mapper[cart.mapper].mapper.PPURead(addr)
+    end
     
     -- Use lookup table for address ranges
     if addr <= 0x1FFF then
@@ -293,6 +299,10 @@ end
     -- Mirrors 0x0 - 0x3FFF
         addr = bit.band(addr, 0x3FFF)
         local cartMapper = mapper[cart.mapper].mapper
+        if cart.mapper == 218 and addr <= 0x3EFF then
+            cartMapper.PPUWrite(addr, data)
+            return data
+        end
     -- Pattern Tables CHR ROM
         if addr >= 0x0000 and addr <= 0x1FFF then
             cartMapper.PPUWrite(addr,data)

@@ -20,6 +20,9 @@ local mappers = {
     [009] = {
         mapper = require("NES.Cartridge.Maps.Map_009")
     },
+    [218] = {
+        mapper = require("NES.Cartridge.Maps.Map_218")
+    },
 }
 
 return mappers
